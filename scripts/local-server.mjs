@@ -2,10 +2,10 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createMcpBridge } from "./mcp/bridge.mjs";
+import { createMcpBridge } from "../mcp/bridge.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PUBLIC_DIR = path.join(__dirname, "public");
+const DEFAULT_PUBLIC_DIR = path.join(__dirname, "..", "public");
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",

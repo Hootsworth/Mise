@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-import { createServer } from "../server.mjs";
+import { createServer } from "../scripts/local-server.mjs";
 import { createMcpBridge, isAllowedCompanionOrigin, isOrderPlacementTool } from "../mcp/bridge.mjs";
 
 async function startMockOAuthAndMcpServer() {
