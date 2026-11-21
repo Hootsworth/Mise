@@ -31,6 +31,12 @@ import {
 import { SAMPLE_RECIPES, SAMPLE_IDEAS } from "./samples.js";
 import { CookModeController } from "./cook-mode.js";
 import { renderSettingsView } from "./settings-view.js";
+import { renderCookingLoader } from "./cooking-loader.js";
+import {
+  hasCompletedOnboarding,
+  resetOnboarding,
+  renderOnboardingView
+} from "./onboarding.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) =>
@@ -120,7 +126,7 @@ function saveJson(key, val) {
 }
 
 const state = {
-  view: "home", // "home" | "ideas" | "recipe" | "settings"
+  view: "home", // "onboarding" | "home" | "ideas" | "recipe" | "settings"
   prevView: "home",
   settingsTab: "ai",
   aiSettings: loadAiSettings(),
@@ -193,11 +199,27 @@ function resolveRecipeImageMeta(recipe) {
 
 function showView(which) {
   state.view = which;
-  $("#home-view").hidden = which !== "home";
-  $("#ideas-view").hidden = which !== "ideas";
-  $("#view").hidden = which !== "recipe";
-  $("#settings-view").hidden = which !== "settings";
+  const views = {
+    onboarding: $("#onboarding-view"),
+    home: $("#home-view"),
+    ideas: $("#ideas-view"),
+    recipe: $("#view"),
+    settings: $("#settings-view")
+  };
+  for (const [key, el] of Object.entries(views)) {
+    if (!el) continue;
+    const active = key === which;
+    el.hidden = !active;
+    if (active) {
+      el.classList.remove("view-enter");
+      void el.offsetWidth;
+      el.classList.add("view-enter");
+    }
+  }
   $("#dock").hidden = which !== "recipe";
+  const inOnboarding = which === "onboarding";
+  $("#kitchen-btn").hidden = inOnboarding;
+  $("#ai-btn").hidden = inOnboarding;
   $("#ai-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab !== "kitchen");
   $("#kitchen-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab === "kitchen");
   $("#home-err").hidden = true;
@@ -572,7 +594,10 @@ function renderIdeasView() {
       `
       )
       .join("");
-    el.innerHTML = `${headerHtml}<div class="ideas-grid">${skeletons}</div>`;
+    el.innerHTML = `${headerHtml}${renderCookingLoader({
+      label: "Curating six dish directions…",
+      detail: "Sampling techniques, textures, and cooking times."
+    })}<div class="ideas-grid">${skeletons}</div>`;
     $("#ideas-back-btn", el).addEventListener("click", () => {
       state.ideasController?.abort();
       state.ideasImageController?.abort();
@@ -634,8 +659,9 @@ function renderIdeasView() {
     btn.addEventListener("click", () => {
       const label = btn.dataset.refine;
       const isSample = options.some((o) => o.sampleRecipeId);
-      if (isSample && !hasAnyConfiguredProvider()) {
-        showError("Configure a server API key to generate custom variations.");
+      if (isSample && !hasAnyReadyProvider(state.aiSettings)) {
+        state.ideasError = "Add an API key in Settings to generate custom variations.";
+        renderIdeasView();
         return;
       }
       openIdeasGrid({
@@ -891,7 +917,7 @@ function renderRecipe() {
       </figure>
     `
     : state.heroImageLoading
-    ? `<figure class="recipe-hero"><div class="dish-frame is-loading"><div class="dish-frame-empty">Finding dish photograph…</div></div></figure>`
+    ? `<figure class="recipe-hero"><div class="dish-frame is-loading"><div class="dish-frame-empty">${renderCookingLoader({ compact: true, label: "Plating dish photography…" })}</div></div></figure>`
     : "";
 
   const ingHtml = (r.ingredients || [])
@@ -978,7 +1004,7 @@ function renderRecipe() {
 
   const toolbarHtml = isStreaming
     ? `<div class="recipe-bar">
-        <span class="stream-badge"><span class="pulse-dot"></span> Writing ${esc(state.streamPhase || "recipe")}…</span>
+        <span class="stream-badge">${renderCookingLoader({ compact: true, label: `Writing ${state.streamPhase || "recipe"}…` })}</span>
         <button type="button" class="tbtn" id="stop-stream-btn">Stop</button>
       </div>`
     : `<div class="recipe-bar">
@@ -1037,24 +1063,33 @@ function renderRecipe() {
       </div>
     </div>
 
-    <div class="cols">
-      <section>
-        <h2 class="h">Ingredients</h2>
-        ${
-          ingHtml
-            ? `<ul class="ing" id="ing">${ingHtml}</ul>`
-            : `<div class="sk-lines"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>`
-        }
-      </section>
-      <section>
-        <h2 class="h">Method</h2>
-        ${
-          stepsHtml
-            ? `<ol class="steps" id="steps">${stepsHtml}</ol>`
-            : `<div class="sk-lines"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>`
-        }
-      </section>
-    </div>
+    ${
+      isStreaming && !ingHtml && !stepsHtml
+        ? renderCookingLoader({
+            label: "Simmering your recipe…",
+            detail: "Balancing ingredients, heat levels, and sensory cues."
+          })
+        : `
+      <div class="cols">
+        <section>
+          <h2 class="h">Ingredients</h2>
+          ${
+            ingHtml
+              ? `<ul class="ing" id="ing">${ingHtml}</ul>`
+              : `<div class="sk-lines"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>`
+          }
+        </section>
+        <section>
+          <h2 class="h">Method</h2>
+          ${
+            stepsHtml
+              ? `<ol class="steps" id="steps">${stepsHtml}</ol>`
+              : `<div class="sk-lines"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>`
+          }
+        </section>
+      </div>
+    `
+    }
 
     ${tipsHtml}
     ${enrichHtml}
@@ -1289,7 +1324,7 @@ async function handleEnrichOpen(section) {
   const bodyEl = $(`#intel-body-${section}`);
   if (!bodyEl) return;
 
-  bodyEl.innerHTML = `<p class="intel-loading">Analyzing ${esc(section)}…</p>`;
+  bodyEl.innerHTML = `<div class="intel-loading">${renderCookingLoader({ compact: true, label: `Tasting & analyzing ${section}…` })}</div>`;
   try {
     const data = await postJson("/api/enrich", {
       recipe: r,
@@ -1324,7 +1359,7 @@ async function openIngredientPopover(ingIdx, triggerEl, customQuestion = "") {
 
     let bodyHtml = "";
     if (status === "loading") {
-      bodyHtml = `<p class="pop-status">Consulting test kitchen…</p>`;
+      bodyHtml = `<div class="pop-status">${renderCookingLoader({ compact: true, label: "Consulting test kitchen…" })}</div>`;
     } else if (status === "error") {
       bodyHtml = `<p class="pop-err">${esc(errMsg)}</p>`;
     } else if (data) {
@@ -1427,7 +1462,7 @@ function openStepPopover(stepIdx, triggerEl) {
   const renderStepPop = (status, data, errMsg = "") => {
     let outHtml = "";
     if (status === "loading") {
-      outHtml = `<p class="pop-status">Asking chef…</p>`;
+      outHtml = `<div class="pop-status">${renderCookingLoader({ compact: true, label: "Checking with chef…" })}</div>`;
     } else if (status === "error") {
       outHtml = `<p class="pop-err">${esc(errMsg)}</p>`;
     } else if (data) {
@@ -1931,11 +1966,36 @@ function openSettings(tab = "ai") {
       return { aiSettings: state.aiSettings, profile: state.profile };
     },
     onFetchModels: (providerId, cfg, signal) => fetchProviderModels(providerId, cfg, { signal }),
-    onTestConnection: (settings, signal) => testProviderConnection(settings, { signal })
+    onTestConnection: (settings, signal) => testProviderConnection(settings, { signal }),
+    onReplayOnboarding: () => {
+      resetOnboarding();
+      openOnboarding();
+    }
   });
 
   showView("settings");
   $("#settings-heading")?.focus();
+}
+
+function openOnboarding() {
+  const root = $("#onboarding-view");
+  renderOnboardingView(root, {
+    aiSettings: state.aiSettings,
+    profile: state.profile,
+    onFetchModels: (providerId, cfg) => fetchProviderModels(providerId, cfg),
+    onComplete: ({ aiSettings, profile }) => {
+      state.aiSettings = saveAiSettings(aiSettings);
+      state.profile = structuredClone(profile);
+      state.unitSystem = state.profile.units === "us" ? "us" : "metric";
+      saveJson("mise:profile", state.profile);
+      updateAiHeaderBadge();
+      updateKitchenDot();
+      showView("home");
+      $("#q")?.focus();
+    }
+  });
+  showView("onboarding");
+  $("#ob-heading")?.focus();
 }
 
 /* ---------------- Bootstrap & Event Wiring ---------------- */
@@ -2135,6 +2195,15 @@ function init() {
   renderLibrary();
   updateKitchenDot();
   updateAiHeaderBadge();
+
+  const isFreshUser =
+    !hasCompletedOnboarding() &&
+    !hasAnyReadyProvider(state.aiSettings) &&
+    state.hist.length === 0 &&
+    state.saved.length === 0;
+  if (isFreshUser) {
+    openOnboarding();
+  }
 }
 
 init();

@@ -46,6 +46,13 @@ const DEFAULT_PROFILE = {
   customNote: ""
 };
 
+function sliderPercent(value, min = 0, max = 1.2) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || max <= min) return "58%";
+  const pct = Math.min(100, Math.max(0, ((num - min) / (max - min)) * 100));
+  return `${pct.toFixed(1)}%`;
+}
+
 function providerStatusTag(settings, providerId) {
   if (providerId === "ollama") return "Local";
   if (providerId === "custom") {
@@ -208,10 +215,14 @@ export function renderSettingsView(rootEl, ctx) {
           </div>
 
           <div class="st-field">
-            <label for="st-temp">Creativity (Temperature): <strong id="st-temp-val">${Number(aiDraft.temperature).toFixed(1)}</strong></label>
+            <div class="st-range-head">
+              <label for="st-temp">Creativity (Temperature)</label>
+              <span class="m3-range-badge" id="st-temp-val">${Number(aiDraft.temperature).toFixed(1)}</span>
+            </div>
             <div class="st-range-row">
               <span>Precise (0.0)</span>
               <input
+                class="m3-slider"
                 type="range"
                 id="st-temp"
                 name="temperature"
@@ -219,6 +230,7 @@ export function renderSettingsView(rootEl, ctx) {
                 max="1.2"
                 step="0.1"
                 value="${esc(aiDraft.temperature)}"
+                style="--val-pct: ${sliderPercent(aiDraft.temperature)}"
               >
               <span>Inventive (1.2)</span>
             </div>
@@ -289,7 +301,7 @@ export function renderSettingsView(rootEl, ctx) {
           <legend>AI image generation preferences</legend>
           <div class="st-field">
             <label for="st-img-prov">Image provider</label>
-            <select id="st-img-prov" name="imageProvider">
+            <select class="m3-select" id="st-img-prov" name="imageProvider">
               <option value="auto" ${aiDraft.imageProvider === "auto" ? "selected" : ""}>Auto (active provider or first configured key)</option>
               ${imgProviders
                 .map(
@@ -350,7 +362,7 @@ export function renderSettingsView(rootEl, ctx) {
           <span class="st-field-label">Dietary preferences</span>
           <div class="preset-chips">
             ${DIET_OPTIONS.map(
-              (d) => `<button type="button" class="chip ${kpDraft.diet.includes(d) ? "is-active" : ""}" data-st-diet="${esc(d)}">${esc(d)}</button>`
+              (d) => `<button type="button" class="chip m3-check-chip ${kpDraft.diet.includes(d) ? "is-active" : ""}" data-st-diet="${esc(d)}">${esc(d)}</button>`
             ).join("")}
           </div>
         </div>
@@ -365,7 +377,7 @@ export function renderSettingsView(rootEl, ctx) {
         <div class="field-split">
           <div class="st-field">
             <label for="st-kp-skill">Skill level</label>
-            <select id="st-kp-skill" name="skillLevel">
+            <select class="m3-select" id="st-kp-skill" name="skillLevel">
               ${["Beginner", "Home Cook", "Confident", "Chef"]
                 .map((s) => `<option value="${esc(s)}" ${kpDraft.skillLevel === s ? "selected" : ""}>${esc(s)}</option>`)
                 .join("")}
@@ -373,14 +385,18 @@ export function renderSettingsView(rootEl, ctx) {
           </div>
           <div class="st-field">
             <label for="st-kp-units">Default units</label>
-            <select id="st-kp-units" name="units">
+            <select class="m3-select" id="st-kp-units" name="units">
               <option value="metric" ${kpDraft.units === "metric" ? "selected" : ""}>Metric (g, ml, °C)</option>
               <option value="us" ${kpDraft.units === "us" ? "selected" : ""}>US (oz, cup, °F)</option>
             </select>
           </div>
           <div class="st-field">
-            <label for="st-kp-servings">Default servings</label>
-            <input type="number" id="st-kp-servings" name="defaultServings" min="1" max="16" value="${esc(kpDraft.defaultServings)}">
+            <span class="st-field-label" id="st-sv-label">Default servings</span>
+            <div class="m3-stepper" role="group" aria-labelledby="st-sv-label">
+              <button type="button" class="m3-step-btn" id="st-sv-dec" aria-label="Decrease default servings">−</button>
+              <span class="m3-step-val" id="st-sv-val">${kpDraft.defaultServings}</span>
+              <button type="button" class="m3-step-btn" id="st-sv-inc" aria-label="Increase default servings">+</button>
+            </div>
           </div>
         </div>
 
@@ -388,7 +404,7 @@ export function renderSettingsView(rootEl, ctx) {
           <span class="st-field-label">Cookware &amp; appliances</span>
           <div class="preset-chips">
             ${EQUIPMENT_OPTIONS.map(
-              (eq) => `<button type="button" class="chip ${kpDraft.equipment.includes(eq) ? "is-active" : ""}" data-st-eq="${esc(eq)}">${esc(eq)}</button>`
+              (eq) => `<button type="button" class="chip m3-check-chip ${kpDraft.equipment.includes(eq) ? "is-active" : ""}" data-st-eq="${esc(eq)}">${esc(eq)}</button>`
             ).join("")}
           </div>
         </div>
@@ -437,6 +453,15 @@ export function renderSettingsView(rootEl, ctx) {
         <fieldset class="st-group">
           <legend>Reset &amp; cleanup</legend>
           <div class="st-danger-rows">
+            <div class="st-danger-row">
+              <div>
+                <strong>Replay welcome setup</strong>
+                <small>Walk through the calm step-by-step setup guide for units, taste notes, and AI again.</small>
+              </div>
+              <div class="st-danger-btns">
+                <button type="button" class="tbtn" id="st-replay-onboarding">Replay onboarding</button>
+              </div>
+            </div>
             <div class="st-danger-row">
               <div>
                 <strong>Clear all API keys</strong>
@@ -579,6 +604,7 @@ export function renderSettingsView(rootEl, ctx) {
 
     rootEl.querySelector("#st-temp")?.addEventListener("input", (e) => {
       aiDraft.temperature = Number(e.target.value);
+      e.target.style.setProperty("--val-pct", sliderPercent(aiDraft.temperature));
       const valEl = rootEl.querySelector("#st-temp-val");
       if (valEl) valEl.textContent = aiDraft.temperature.toFixed(1);
     });
@@ -719,13 +745,23 @@ export function renderSettingsView(rootEl, ctx) {
       kpDraft.allergies = rootEl.querySelector("#st-kp-allergies")?.value || "";
       kpDraft.skillLevel = rootEl.querySelector("#st-kp-skill")?.value || "Home Cook";
       kpDraft.units = rootEl.querySelector("#st-kp-units")?.value === "us" ? "us" : "metric";
-      kpDraft.defaultServings = Math.max(
-        1,
-        Math.min(16, Number(rootEl.querySelector("#st-kp-servings")?.value) || 2)
-      );
       kpDraft.pantry = rootEl.querySelector("#st-kp-pantry")?.value || "";
       kpDraft.customNote = rootEl.querySelector("#st-kp-note")?.value || "";
     };
+
+    rootEl.querySelector("#st-sv-dec")?.addEventListener("click", () => {
+      kpDraft.defaultServings = Math.max(1, Number(kpDraft.defaultServings || 2) - 1);
+      const el = rootEl.querySelector("#st-sv-val");
+      if (el) el.textContent = String(kpDraft.defaultServings);
+      statusMsg = { text: "", isError: false };
+    });
+
+    rootEl.querySelector("#st-sv-inc")?.addEventListener("click", () => {
+      kpDraft.defaultServings = Math.min(16, Number(kpDraft.defaultServings || 2) + 1);
+      const el = rootEl.querySelector("#st-sv-val");
+      if (el) el.textContent = String(kpDraft.defaultServings);
+      statusMsg = { text: "", isError: false };
+    });
 
     rootEl.querySelectorAll("[data-st-diet]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -768,6 +804,10 @@ export function renderSettingsView(rootEl, ctx) {
   };
 
   const bindDataTab = () => {
+    rootEl.querySelector("#st-replay-onboarding")?.addEventListener("click", () => {
+      ctx.onReplayOnboarding?.();
+    });
+
     rootEl.querySelectorAll("[data-arm-danger]").forEach((btn) => {
       btn.addEventListener("click", () => {
         confirmDanger = btn.dataset.armDanger;
