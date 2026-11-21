@@ -120,8 +120,8 @@ export async function discoverOAuthMetadata(providerId, { fetchImpl = fetch, ove
 function buildLoopbackRedirectUri(providerId, baseOrigin) {
   const cfg = OAUTH_PROVIDERS[providerId];
   const parsed = new URL(baseOrigin || "http://localhost:3456");
-  // Normalize 127.0.0.1 -> localhost so Swiggy/Zepto allowlists match consistently
-  if (parsed.hostname === "127.0.0.1") {
+  // Normalize http://127.0.0.1 -> http://localhost so Swiggy/Zepto allowlists match consistently
+  if (parsed.protocol === "http:" && parsed.hostname === "127.0.0.1") {
     parsed.hostname = "localhost";
   }
   const normalizedBase = `${parsed.protocol}//${parsed.host}`;
@@ -202,10 +202,9 @@ export async function startOAuthFlow({
     fetchImpl
   });
 
-  const { codeVerifier, codeChallenge, state } = generatePkcePair();
+  const { codeVerifier, codeChallenge, state: randomState } = generatePkcePair();
   const scope = cfg.defaultScope || meta.defaultScope;
-
-  store.putPendingAuth(state, {
+  const pendingPayload = {
     providerId,
     codeVerifier,
     redirectUri,
@@ -213,7 +212,11 @@ export async function startOAuthFlow({
     clientSecret,
     openerOrigin: openerOrigin || baseOrigin,
     tokenEndpoint: meta.tokenEndpoint
-  });
+  };
+  const state =
+    typeof store.createPendingState === "function"
+      ? store.createPendingState(pendingPayload)
+      : (store.putPendingAuth(randomState, pendingPayload), randomState);
 
   const authUrl = new URL(meta.authorizationEndpoint);
   authUrl.searchParams.set("response_type", "code");

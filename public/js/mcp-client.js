@@ -71,13 +71,39 @@ export function resolveCompanionOrigin(prefs, loc = globalThis.location) {
   return "";
 }
 
+const SESSION_TOKEN_KEY = "mise:mcp-session-token";
+
+function getStoredSessionToken() {
+  try {
+    return typeof sessionStorage !== "undefined" ? sessionStorage.getItem(SESSION_TOKEN_KEY) || "" : "";
+  } catch {
+    return "";
+  }
+}
+
+function saveStoredSessionToken(tok) {
+  try {
+    if (typeof sessionStorage === "undefined") return;
+    if (!tok || tok === "cleared") sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    else sessionStorage.setItem(SESSION_TOKEN_KEY, tok);
+  } catch {
+    // Storage unavailable
+  }
+}
+
 async function companionJson(origin, path, { method = "GET", body, signal } = {}) {
   if (!origin) {
-    throw new Error("Local MCP Companion is not connected.");
+    throw new Error("Local or Vercel MCP Companion is not connected.");
+  }
+  const headers = {};
+  const sessionTok = getStoredSessionToken();
+  if (sessionTok) {
+    headers["X-Mise-Session"] = sessionTok;
   }
   const init = {
     method,
-    headers: {},
+    headers,
+    credentials: "include",
     signal
   };
   if (body !== undefined) {
@@ -85,6 +111,10 @@ async function companionJson(origin, path, { method = "GET", body, signal } = {}
     init.body = JSON.stringify(body);
   }
   const res = await fetch(`${origin}${path}`, init);
+  const nextTok = res.headers?.get?.("x-mise-session");
+  if (nextTok) {
+    saveStoredSessionToken(nextTok);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data?.error || `Companion error (${res.status})`);
@@ -98,7 +128,7 @@ export async function fetchCompanionStatus(prefs, { signal, forceLocalProbe = fa
     origin = "http://localhost:3456";
   }
   if (!origin) {
-    return { available: false, origin: "", providers: {}, error: "" };
+    return { available: false, mode: "", origin: "", providers: {}, error: "" };
   }
   const effectiveSignal =
     signal || (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(2500) : undefined);
@@ -106,6 +136,7 @@ export async function fetchCompanionStatus(prefs, { signal, forceLocalProbe = fa
     const data = await companionJson(origin, "/api/mcp/status", { signal: effectiveSignal });
     return {
       available: Boolean(data?.available),
+      mode: data?.mode || "local",
       origin,
       providers: data?.providers || {},
       error: ""
@@ -113,6 +144,7 @@ export async function fetchCompanionStatus(prefs, { signal, forceLocalProbe = fa
   } catch (err) {
     return {
       available: false,
+      mode: "",
       origin,
       providers: {},
       error: err?.message || "Local MCP Companion unreachable."
@@ -189,6 +221,9 @@ export async function startOAuthSignIn(providerId, prefs) {
     const onMessage = (event) => {
       if (!isSameOriginSafe(event, expectedCallbackOrigin)) return;
       if (event.data?.type !== "mise:mcp-auth") return;
+      if (event.data.sessionToken) {
+        saveStoredSessionToken(event.data.sessionToken);
+      }
       if (event.data.ok) {
         finishOk(event.data);
       } else {
@@ -303,5 +338,53 @@ export async function callMcpTool({ provider, tool, args = {}, confirmedRealOrde
   return await companionJson(origin, "/api/mcp/call", {
     method: "POST",
     body: { provider, tool, args, confirmedRealOrder }
+  });
+}
+
+export async function fetchGoToGroceries({ provider = "swiggy-im", addressId = "" }, prefs) {
+  const origin = resolveCompanionOrigin(prefs);
+  return await companionJson(origin, "/api/mcp/groceries/goto", {
+    method: "POST",
+    body: { provider, addressId }
+  });
+}
+
+export async function fetchPaymentOptions({ provider, addressId = "" }, prefs) {
+  const origin = resolveCompanionOrigin(prefs);
+  return await companionJson(origin, "/api/mcp/payment/options", {
+    method: "POST",
+    body: { provider, addressId }
+  });
+}
+
+export async function submitRealPayment(payload, prefs) {
+  const origin = resolveCompanionOrigin(prefs);
+  return await companionJson(origin, "/api/mcp/payment/pay", {
+    method: "POST",
+    body: payload
+  });
+}
+
+export async function pollPaymentStatus(payload, prefs) {
+  const origin = resolveCompanionOrigin(prefs);
+  return await companionJson(origin, "/api/mcp/payment/status", {
+    method: "POST",
+    body: payload
+  });
+}
+
+export async function confirmPaidOrder(payload, prefs) {
+  const origin = resolveCompanionOrigin(prefs);
+  return await companionJson(origin, "/api/mcp/payment/confirm", {
+    method: "POST",
+    body: payload
+  });
+}
+
+export async function trackLiveOrder(payload, prefs) {
+  const origin = resolveCompanionOrigin(prefs);
+  return await companionJson(origin, "/api/mcp/orders/track", {
+    method: "POST",
+    body: payload
   });
 }

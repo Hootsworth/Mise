@@ -44,3 +44,24 @@ npm test
 # Start Mise + Local MCP Companion at http://localhost:3456
 npm start
 ```
+
+## Full Cart, UPI QR & Live Order Tracking
+
+When connected to the Local MCP Companion (`npm start`) or a free Vercel cloud backend, Mise upgrades delivery ordering into an end-to-end workbench:
+
+- **Groceries & Restaurants**: Live Swiggy Instamart, Zepto, and Swiggy Food catalogs with thumbnails, `− / qty / +` cart steppers, Swiggy frequent go-to quick reorders (`your_go_to_items`), itemized bills, and Swiggy Food coupons.
+- **In-Mise Payment & UPI QR**: Renders only merchant-returned payment options (`get_payment_options`), guards real-money orders behind an explicit 2-step confirmation, displays an offline SVG UPI QR code on desktop alongside UPI app intent links, polls `check_payment_status` on `PENDING_PAYMENT`, and calls `confirm_order` before reporting success.
+- **Live Order Tracking**: Polls live Swiggy Instamart (`get_delivery_status`), Swiggy Food (`track_food_order`), and Zepto order status inside the **Cart & Pay** sheet and header pill.
+
+## Free Cloud Backend (Vercel Hobby, $0/mo)
+
+To unlock OAuth 2.1 sign-in, live carts, and UPI checkout directly from static GitHub Pages (`https://adityapdixit.me/Mise/`), deploy this repository on **Vercel Hobby** with zero database required (`api/[...route].mjs` + `vercel.json`):
+
+1. Import this repo on [Vercel](https://vercel.com/new) (or run `npx vercel`). Vercel automatically routes `/api/*` to `api/[...route].mjs` and rewrites `/callback` to `/api/mcp/oauth/callback/zepto`.
+2. In **Vercel Project Settings → Environment Variables**, configure:
+   - `MISE_SESSION_SECRET` — required AES-256-GCM key (`openssl rand -hex 32`) used to encrypt provider sessions into `HttpOnly` cookies / `X-Mise-Session` headers and sign stateless `st1.` OAuth PKCE `state` parameters.
+   - `MISE_ALLOWED_ORIGINS` — optional comma-separated allowed frontend origins (defaults to `https://adityapdixit.me` and localhost dev ports).
+3. Submit your deployed HTTPS callback URLs for allowlisting before signing in from GitHub Pages:
+   - Swiggy MCP (`/access` on Swiggy Builders): `https://<your-vercel-domain>/api/mcp/oauth/callback/swiggy`
+   - Zepto MCP (`zeptonow/mcp` issue / allowlist): `https://<your-vercel-domain>/callback`
+4. Paste your `https://<your-vercel-domain>` URL into **Settings → Delivery & MCP → Companion or Vercel Backend URL** and click **Check connection**. (Note: unofficial `blinkit-mcp` remains **Local Only** via `npm start` because it relies on local Playwright/Python stdio.)

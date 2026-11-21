@@ -533,6 +533,8 @@ export function renderSettingsView(rootEl, ctx) {
     const zeptoPerms = GROCERY_PLATFORMS.find((p) => p.id === "zepto")?.permissions || [];
     const blinkitPerms = GROCERY_PLATFORMS.find((p) => p.id === "blinkit")?.permissions || [];
     const zomatoPerms = FOOD_PLATFORMS.find((p) => p.id === "zomato")?.permissions || [];
+    const isCloudMode = mcpState?.mode === "vercel-stateless";
+    const blinkitLocalOnly = isCloudMode || blinkit.mode === "local-only";
     const renderCardNotice = (pid) => {
       const n = cardNotice[pid];
       if (!n?.text) return "";
@@ -542,21 +544,27 @@ export function renderSettingsView(rootEl, ctx) {
     return `
       <div class="st-delivery">
         <fieldset class="st-group">
-          <legend>Local MCP Companion</legend>
+          <legend>MCP Companion (Local or Free Vercel)</legend>
           <div class="mcp-companion-head">
             <span class="mcp-badge ${companionOn ? "is-on" : ""}">
               <span class="mcp-dot ${companionOn ? "is-on" : ""}" aria-hidden="true"></span>
-              ${companionOn ? `Companion connected (${esc(mcpState.origin || "localhost")})` : "Static web mode (Deep-links active)"}
+              ${
+                companionOn
+                  ? isCloudMode
+                    ? `Cloud backend connected (${esc(mcpState.origin || "Vercel")})`
+                    : `Local companion connected (${esc(mcpState.origin || "localhost")})`
+                  : "Static web mode (Deep-links active)"
+              }
             </span>
           </div>
           <div class="st-field">
-            <label for="st-mcp-url">Companion URL (optional when on localhost)</label>
+            <label for="st-mcp-url">Companion or Vercel Backend URL (optional when on localhost)</label>
             <div class="st-input-row">
               <input
                 type="url"
                 id="st-mcp-url"
                 value="${esc(deliveryDraft.companionUrl)}"
-                placeholder="http://localhost:3456"
+                placeholder="https://mise-mcp.vercel.app or http://localhost:3456"
                 autocorrect="off"
                 autocapitalize="none"
                 spellcheck="false"
@@ -565,8 +573,16 @@ export function renderSettingsView(rootEl, ctx) {
             </div>
           </div>
           <p class="st-help">
-            Run <code>npm start</code> locally to unlock OAuth 2.1 sign-in for Swiggy &amp; Zepto and local Blinkit MCP bridging. On static GitHub Pages without a companion process, Mise opens one-click search deep-links directly.
+            Run <code>npm start</code> locally or deploy Mise’s zero-DB <code>api/</code> backend on Vercel Hobby ($0/mo) to unlock OAuth 2.1, carts, and in-Mise UPI/COD checkout for Swiggy &amp; Zepto. On static GitHub Pages without a backend, Mise opens smart search links directly.
           </p>
+          <details class="mcp-cloud-guide">
+            <summary>How to deploy a free Vercel backend for GitHub Pages ($0/mo)</summary>
+            <ol>
+              <li>Deploy this repo on <a href="https://vercel.com/new" target="_blank" rel="noopener noreferrer">Vercel Hobby</a> (or run <code>npx vercel</code>) — it auto-detects <code>api/[...route].mjs</code> and <code>vercel.json</code> with zero database.</li>
+              <li>In Vercel Project Settings → Environment Variables, set <code>MISE_SESSION_SECRET</code> (run <code>openssl rand -hex 32</code>) and optional <code>MISE_ALLOWED_ORIGINS</code> (<code>https://adityapdixit.me</code>), then paste your Vercel URL above and click <strong>Check connection</strong>.</li>
+              <li>Submit your HTTPS callbacks (<code>&lt;your-vercel-url&gt;/api/mcp/oauth/callback/swiggy</code> and <code>&lt;your-vercel-url&gt;/callback</code>) to Swiggy Builders <code>/access</code> and the <code>zeptonow/mcp</code> allowlist before signing in from GitHub Pages.</li>
+            </ol>
+          </details>
         </fieldset>
 
         <fieldset class="st-group">
@@ -585,7 +601,7 @@ export function renderSettingsView(rootEl, ctx) {
               </ul>
               ${renderCardNotice("swiggy")}
               <div class="mcp-app-foot">
-                <small class="mcp-meta">${swiggy.connected ? esc(formatExpiry(swiggy.expiresAt) || "Active session") : "Phone + OTP in Swiggy popup"}</small>
+                <small class="mcp-meta">${swiggy.connected ? esc(formatExpiry(swiggy.expiresAt) || "Active session") : isCloudMode ? "HTTPS callback · Phone + OTP popup" : "Phone + OTP in Swiggy popup"}</small>
                 <div class="mcp-card-acts">
                   ${
                     swiggy.connected
@@ -609,7 +625,7 @@ export function renderSettingsView(rootEl, ctx) {
               </ul>
               ${renderCardNotice("zepto")}
               <div class="mcp-app-foot">
-                <small class="mcp-meta">${zepto.connected ? esc(formatExpiry(zepto.expiresAt) || "Active session") : "Uses whitelisted localhost /callback"}</small>
+                <small class="mcp-meta">${zepto.connected ? esc(formatExpiry(zepto.expiresAt) || "Active session") : isCloudMode ? "Uses /callback rewrite on Vercel" : "Uses whitelisted localhost /callback"}</small>
                 <div class="mcp-card-acts">
                   ${
                     zepto.connected
@@ -626,13 +642,25 @@ export function renderSettingsView(rootEl, ctx) {
                   <strong>Blinkit (Unofficial MCP)</strong>
                   <small>hereisSwapnil/blinkit-mcp · Local Python Playwright</small>
                 </div>
-                <span class="mcp-badge ${blinkit.connected && blinkit.loggedIn ? "is-on" : ""}">
-                  ${blinkit.connected ? (blinkit.loggedIn ? "Signed in" : "Connected · Login needed") : "Not connected"}
+                <span class="mcp-badge ${!blinkitLocalOnly && blinkit.connected && blinkit.loggedIn ? "is-on" : ""}">
+                  ${blinkitLocalOnly ? "Local Only" : blinkit.connected ? (blinkit.loggedIn ? "Signed in" : "Connected · Login needed") : "Not connected"}
                 </span>
               </div>
               <ul class="mcp-perm-list">
                 ${blinkitPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
               </ul>
+              ${
+                blinkitLocalOnly
+                  ? `
+                <p class="mcp-cloud-note">
+                  Blinkit’s unofficial Playwright MCP requires local Chromium/Python stdio execution. Run <code>npm start</code> locally to connect Blinkit, or use Swiggy Instamart &amp; Zepto on Vercel + GitHub Pages.
+                </p>
+                <div class="mcp-app-foot">
+                  <small class="mcp-meta">Unavailable on serverless cloud backends</small>
+                  <a class="tbtn" href="https://github.com/hereisSwapnil/blinkit-mcp" target="_blank" rel="noopener noreferrer">View docs ↗</a>
+                </div>
+              `
+                  : `
               <div class="mcp-blinkit-cfg">
                 <div class="field-split">
                   <div class="st-field">
@@ -689,6 +717,8 @@ export function renderSettingsView(rootEl, ctx) {
                   <button type="button" class="go" id="st-blinkit-connect" ${!companionOn || mcpBusy ? "disabled" : ""}>${blinkit.connected ? "Reconnect" : "Connect Blinkit"}</button>
                 </div>
               </div>
+              `
+              }
             </article>
 
             <article class="mcp-app-card">

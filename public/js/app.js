@@ -187,6 +187,21 @@ state.unitSystem = state.profile.units === "us" ? "us" : "metric";
 const timerManager = new TimerManager();
 let cookMode = null;
 let orderSheet = null;
+let cartHudState = { cartCount: 0, activeOrder: null };
+
+function updateCartButton(inOnboarding = state.view === "onboarding") {
+  const btn = $("#cart-btn");
+  if (!btn) return;
+  const { cartCount, activeOrder } = cartHudState;
+  if (inOnboarding || (!cartCount && !activeOrder)) {
+    btn.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  btn.textContent = activeOrder
+    ? `Order · ${activeOrder.status || "Live"}`
+    : `Cart (${cartCount})`;
+}
 
 async function refreshMcpStatus(prefsOverride = state.deliveryPrefs, { forceLocalProbe = false } = {}) {
   const next = await fetchCompanionStatus(prefsOverride, { forceLocalProbe });
@@ -246,6 +261,7 @@ function showView(which) {
   const inOnboarding = which === "onboarding";
   $("#kitchen-btn").hidden = inOnboarding;
   $("#ai-btn").hidden = inOnboarding;
+  updateCartButton(inOnboarding);
   $("#ai-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab !== "kitchen");
   $("#kitchen-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab === "kitchen");
   $("#home-err").hidden = true;
@@ -2150,7 +2166,11 @@ async function init() {
       else state.checkedIng.add(idx);
       if (state.view === "recipe") renderRecipe();
     },
-    onOpenDeliverySettings: () => openSettings("delivery")
+    onOpenDeliverySettings: () => openSettings("delivery"),
+    onCartOrOrderUpdate: ({ cartCount, activeOrder }) => {
+      cartHudState = { cartCount: Number(cartCount || 0), activeOrder: activeOrder || null };
+      updateCartButton();
+    }
   });
 
   timerManager.subscribe((timers) => {
@@ -2173,6 +2193,7 @@ async function init() {
   });
   $("#ai-btn").addEventListener("click", () => openSettings("ai"));
   $("#kitchen-btn").addEventListener("click", () => openSettings("kitchen"));
+  $("#cart-btn").addEventListener("click", () => orderSheet?.open(activeRecipe(), { tab: "cart" }));
 
   $("#ing-toggle-btn").addEventListener("click", () => {
     state.ingDrawerOpen = !state.ingDrawerOpen;
