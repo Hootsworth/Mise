@@ -14,11 +14,15 @@ import {
   openAnchoredPopover
 } from "./overlays.js";
 import {
-  loadSelectedProvider,
-  saveSelectedProvider,
-  loadAiImagesOptIn,
-  saveAiImagesOptIn,
-  getHealth,
+  createDefaultAiSettings,
+  loadAiSettings,
+  saveAiSettings,
+  clearAllApiKeys,
+  hasAnyReadyProvider,
+  canGenerateAiImage,
+  formatActiveProviderBadge,
+  fetchProviderModels,
+  testProviderConnection,
   postJson,
   streamRecipeEndpoint,
   fetchDishIdeas,
@@ -26,6 +30,7 @@ import {
 } from "./api.js";
 import { SAMPLE_RECIPES, SAMPLE_IDEAS } from "./samples.js";
 import { CookModeController } from "./cook-mode.js";
+import { renderSettingsView } from "./settings-view.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) =>
@@ -79,28 +84,6 @@ const REFINE_CHIPS = [
   "More ideas"
 ];
 
-const DIET_OPTIONS = [
-  "Vegetarian",
-  "Vegan",
-  "Gluten-Free",
-  "Dairy-Free",
-  "Nut-Free",
-  "High-Protein",
-  "Low-Carb",
-  "Pescatarian"
-];
-
-const EQUIPMENT_OPTIONS = [
-  "Cast Iron",
-  "Dutch Oven",
-  "Sheet Pan",
-  "Air Fryer",
-  "Blender",
-  "Food Processor",
-  "Wok",
-  "Instant Pot"
-];
-
 const STEP_RESCUE_CHIPS = [
   "What should this look or smell like?",
   "Too watery / not thickening",
@@ -118,15 +101,6 @@ const DEFAULT_PROFILE = {
   pantry: "",
   customNote: ""
 };
-
-const FALLBACK_PROVIDERS = [
-  { id: "gemini", label: "Google Gemini", configured: false, supportsImages: true },
-  { id: "meta", label: "Meta AI", configured: false, supportsImages: true },
-  { id: "openai", label: "OpenAI", configured: false, supportsImages: true },
-  { id: "claude", label: "Anthropic Claude", configured: false, supportsImages: false },
-  { id: "openrouter", label: "OpenRouter", configured: false, supportsImages: true },
-  { id: "ollama", label: "Local Ollama", configured: false, supportsImages: false }
-];
 
 function loadJson(key, fallback) {
   try {
@@ -146,7 +120,10 @@ function saveJson(key, val) {
 }
 
 const state = {
-  view: "home", // "home" | "ideas" | "recipe"
+  view: "home", // "home" | "ideas" | "recipe" | "settings"
+  prevView: "home",
+  settingsTab: "ai",
+  aiSettings: loadAiSettings(),
   mode: "any",
   ingDrawerOpen: false,
   libTab: "recent",
@@ -170,13 +147,11 @@ const state = {
   streamController: null,
   heroColor: false,
   heroImageLoading: false,
-  aiImagesOptIn: loadAiImagesOptIn(),
   seenHeroUrls: new Map(), // title.toLowerCase() -> string[] for cycling open photos
   sessionImageMap: new Map(), // title.toLowerCase() -> { imageUrl, credit, creditUrl, isAi }
   hist: loadJson("mise:hist", []),
   saved: loadJson("mise:saved", []),
   profile: { ...DEFAULT_PROFILE, ...(loadJson("mise:profile", {}) || {}) },
-  health: null,
   ingIntelCache: new Map(),
   stepHelpCache: new Map(),
   activePopIngIdx: null,
@@ -221,7 +196,10 @@ function showView(which) {
   $("#home-view").hidden = which !== "home";
   $("#ideas-view").hidden = which !== "ideas";
   $("#view").hidden = which !== "recipe";
+  $("#settings-view").hidden = which !== "settings";
   $("#dock").hidden = which !== "recipe";
+  $("#ai-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab !== "kitchen");
+  $("#kitchen-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab === "kitchen");
   $("#home-err").hidden = true;
   $("#view-err").hidden = true;
   if (which !== "recipe") hidePopovers();
@@ -678,7 +656,6 @@ function renderIdeasView() {
 
 async function hydrateIdeasImages(options) {
   if (!options?.length) return;
-  if (state.health && !state.health.imageGenerationAvailable) return;
 
   state.ideasImageController?.abort();
   state.ideasImageController = new AbortController();
@@ -705,7 +682,7 @@ async function hydrateIdeasImages(options) {
           tagline: opt.tagline,
           cuisine: opt.cuisine,
           visualPrompt: opt.visual_prompt,
-          useAi: state.aiImagesOptIn
+          useAi: state.aiSettings.imageMode === "ai"
         },
         signal
       );
@@ -825,9 +802,8 @@ function cookSelectedOption(option) {
 
 /* ---------------- Recipe Hero Image ---------------- */
 
-async function hydrateRecipeHeroImage(recipe, { forceRefresh = false, useAi = state.aiImagesOptIn } = {}) {
+async function hydrateRecipeHeroImage(recipe, { forceRefresh = false, useAi = state.aiSettings.imageMode === "ai" } = {}) {
   if (!recipe || !recipe.title) return;
-  if (state.health && !state.health.imageGenerationAvailable) return;
 
   const key = recipe.title.toLowerCase();
   const seenList = state.seenHeroUrls.get(key) || [];
@@ -886,7 +862,7 @@ function renderRecipe() {
   const saved = isSaved(r);
   const heroMeta = resolveRecipeImageMeta(r);
   const heroUrl = heroMeta.imageUrl;
-  const canOptInAiImage = Boolean(state.health?.aiImageGenerationAvailable) && !heroMeta.isAi;
+  const canOptInAiImage = canGenerateAiImage(state.aiSettings) && !heroMeta.isAi;
 
   const timeDetails = [];
   if (r.prep_minutes != null) timeDetails.push(`${r.prep_minutes}m prep`);
@@ -1012,7 +988,7 @@ function renderRecipe() {
         </div>
         <div class="bar-right">
           ${
-            !heroUrl && !state.heroImageLoading && state.health?.imageGenerationAvailable !== false
+            !heroUrl && !state.heroImageLoading
               ? `<button type="button" class="tbtn" id="gen-photo-btn">Photo</button>`
               : ""
           }
@@ -1860,134 +1836,7 @@ function formatGroceryList(r) {
   return [`Grocery list — ${r.title} (${state.servings} servings)`, ...needed].join("\n");
 }
 
-/* ---------------- Provider Picker Dialog (Server-Secret Only) ---------------- */
-
-function getProviderList() {
-  return state.health?.providers?.length ? state.health.providers : FALLBACK_PROVIDERS;
-}
-
-function hasAnyConfiguredProvider() {
-  return getProviderList().some((p) => p.configured);
-}
-
-function getEffectiveProviderId() {
-  const list = getProviderList();
-  const saved = loadSelectedProvider();
-  const savedEntry = list.find((p) => p.id === saved);
-  if (savedEntry && (savedEntry.configured || !hasAnyConfiguredProvider())) {
-    return savedEntry.id;
-  }
-  return state.health?.defaultProvider || list.find((p) => p.configured)?.id || "gemini";
-}
-
-function updateAiHeaderBadge() {
-  const list = getProviderList();
-  const activeId = getEffectiveProviderId();
-  const active = list.find((p) => p.id === activeId) || list[0];
-  $("#ai-label").textContent = active ? active.label.replace(/^Google |^Anthropic |^Local /, "") : "Provider";
-
-  const note = $("#ai-note");
-  const wireSamplesBtn = () => {
-    $("#open-samples-from-note")?.addEventListener("click", () => {
-      const disc = $("#samples-disclosure");
-      if (disc) {
-        disc.open = true;
-        disc.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }
-    });
-  };
-  if (state.health?.staticOnly) {
-    note.hidden = false;
-    note.innerHTML = `Static mode active — <button type="button" class="link-btn" id="open-samples-from-note">browse samples</button> or connect a Cloudflare Worker in GitHub Secrets.`;
-    wireSamplesBtn();
-  } else if (state.health && !hasAnyConfiguredProvider()) {
-    note.hidden = false;
-    note.innerHTML = `No AI key configured — <button type="button" class="link-btn" id="open-samples-from-note">browse samples</button> or <button type="button" class="link-btn" id="open-ai-from-note">choose provider</button>.`;
-    wireSamplesBtn();
-    $("#open-ai-from-note")?.addEventListener("click", openAiDialog);
-  } else {
-    note.hidden = true;
-  }
-}
-
-function openAiDialog() {
-  const dialog = $("#ai-dialog");
-  const list = getProviderList();
-  let selectedId = getEffectiveProviderId();
-
-  const renderDialog = () => {
-    dialog.innerHTML = `
-      <div class="modal-head">
-        <div>
-          <small>Server-configured AI</small>
-          <h2 id="ai-dialog-title">Choose Provider</h2>
-        </div>
-        <button type="button" class="pop-close" id="ai-close-btn" aria-label="Close">×</button>
-      </div>
-
-      <div class="prov-list" role="radiogroup" aria-label="AI Providers">
-        ${list
-          .map((p) => {
-            const active = p.id === selectedId;
-            return `
-              <button
-                type="button"
-                role="radio"
-                aria-checked="${active}"
-                class="prov-item ${active ? "is-active" : ""} ${p.configured ? "" : "is-unconfigured"}"
-                data-pick-prov="${esc(p.id)}"
-              >
-                <span class="prov-item-main">
-                  <strong>${esc(p.label)}</strong>
-                  <small>${p.supportsImages ? "Recipes + optional AI photography" : "Recipes & culinary text"}</small>
-                </span>
-                <span class="prov-status">${p.configured ? "Ready" : "Not configured"}</span>
-              </button>
-            `;
-          })
-          .join("")}
-      </div>
-
-      <div class="img-optin-box">
-        <div class="img-optin-head">
-          <div>
-            <strong>Dish Photography</strong>
-            <small>Default uses free open photography (Openverse, Wikimedia Commons, TheMealDB). Opt in to generate custom AI photos.</small>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked="${state.aiImagesOptIn}"
-            class="tbtn ${state.aiImagesOptIn ? "is-active" : ""}"
-            id="ai-images-toggle"
-          >${state.aiImagesOptIn ? "On · AI opt-in" : "Off · Open web photos"}</button>
-        </div>
-      </div>
-
-      <p class="field-help">Models and API keys are managed securely on the server via GitHub Secrets / environment variables.</p>
-    `;
-
-    dialog.querySelector("#ai-close-btn").addEventListener("click", () => closeTopLayer(dialog));
-    dialog.querySelector("#ai-images-toggle").addEventListener("click", () => {
-      state.aiImagesOptIn = !state.aiImagesOptIn;
-      saveAiImagesOptIn(state.aiImagesOptIn);
-      renderDialog();
-    });
-    dialog.querySelectorAll("[data-pick-prov]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        selectedId = btn.dataset.pickProv;
-        saveSelectedProvider(selectedId);
-        updateAiHeaderBadge();
-        closeTopLayer(dialog);
-      });
-    });
-  };
-
-  renderDialog();
-  dialog.showModal();
-}
-
-/* ---------------- Kitchen Profile Dialog ---------------- */
+/* ---------------- BYOK Settings View & Kitchen Indicator ---------------- */
 
 function updateKitchenDot() {
   const p = state.profile;
@@ -2001,149 +1850,98 @@ function updateKitchenDot() {
   $("#kitchen-dot").hidden = !hasPrefs;
 }
 
-function openKitchenDialog() {
-  const dialog = $("#kitchen-dialog");
-  const draft = structuredClone(state.profile);
+function updateAiHeaderBadge() {
+  $("#ai-label").textContent = formatActiveProviderBadge(state.aiSettings);
 
-  const renderProfile = () => {
-    dialog.innerHTML = `
-      <div class="modal-head">
-        <div>
-          <small>Always applied to prompts</small>
-          <h2 id="kitchen-dialog-title">Kitchen Profile</h2>
-        </div>
-        <button type="button" class="pop-close" id="kp-close" aria-label="Close">×</button>
-      </div>
-
-      <div class="modal-fields">
-        <div class="field">
-          <span>Dietary Preferences</span>
-          <div class="preset-chips">
-            ${DIET_OPTIONS.map(
-              (d) => `<button type="button" class="chip ${draft.diet.includes(d) ? "is-active" : ""}" data-diet="${esc(d)}">${esc(d)}</button>`
-            ).join("")}
-          </div>
-        </div>
-
-        <label class="field">
-          <span>Allergies & Strict Avoidances</span>
-          <input type="text" id="kp-allergies" value="${esc(draft.allergies)}" placeholder="e.g. peanuts, shellfish, cilantro">
-        </label>
-
-        <div class="field-split">
-          <label class="field">
-            <span>Skill Level</span>
-            <select id="kp-skill">
-              ${["Beginner", "Home Cook", "Confident", "Chef"]
-                .map((s) => `<option value="${esc(s)}" ${draft.skillLevel === s ? "selected" : ""}>${esc(s)}</option>`)
-                .join("")}
-            </select>
-          </label>
-          <label class="field">
-            <span>Default Units</span>
-            <select id="kp-units">
-              <option value="metric" ${draft.units === "metric" ? "selected" : ""}>Metric (g, ml, °C)</option>
-              <option value="us" ${draft.units === "us" ? "selected" : ""}>US (oz, cup, °F)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Default Servings</span>
-            <input type="number" id="kp-servings" min="1" max="16" value="${esc(draft.defaultServings)}">
-          </label>
-        </div>
-
-        <div class="field">
-          <span>Cookware & Appliances</span>
-          <div class="preset-chips">
-            ${EQUIPMENT_OPTIONS.map(
-              (eq) => `<button type="button" class="chip ${draft.equipment.includes(eq) ? "is-active" : ""}" data-eq="${esc(eq)}">${esc(eq)}</button>`
-            ).join("")}
-          </div>
-        </div>
-
-        <label class="field">
-          <span>Pantry Staples on Hand</span>
-          <input type="text" id="kp-pantry" value="${esc(draft.pantry)}" placeholder="e.g. white miso, mirin, sesame oil, arborio rice">
-        </label>
-
-        <label class="field">
-          <span>House Style Notes</span>
-          <input type="text" id="kp-note" value="${esc(draft.customNote)}" placeholder="e.g. keep weeknight recipes under 30 min, love bright acid">
-        </label>
-      </div>
-
-      <div class="modal-foot">
-        <button type="button" class="tbtn" id="kp-clear">Reset</button>
-        <button type="button" class="go" id="kp-save">Save profile</button>
-      </div>
-    `;
-
-    dialog.querySelector("#kp-close").addEventListener("click", () => closeTopLayer(dialog));
-
-    dialog.querySelectorAll("[data-diet]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const val = btn.dataset.diet;
-        const idx = draft.diet.indexOf(val);
-        if (idx === -1) draft.diet.push(val);
-        else draft.diet.splice(idx, 1);
-        renderProfile();
-      });
+  const note = $("#ai-note");
+  if (!hasAnyReadyProvider(state.aiSettings)) {
+    note.hidden = false;
+    note.innerHTML = `Bring your own AI — <button type="button" class="link-btn" id="open-ai-from-note">open Settings</button> to add an API key, or <button type="button" class="link-btn" id="open-samples-from-note">browse samples</button>.`;
+    $("#open-ai-from-note")?.addEventListener("click", () => openSettings("ai"));
+    $("#open-samples-from-note")?.addEventListener("click", () => {
+      const disc = $("#samples-disclosure");
+      if (disc) {
+        disc.open = true;
+        disc.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
     });
+  } else {
+    note.hidden = true;
+  }
+}
 
-    dialog.querySelectorAll("[data-eq]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const val = btn.dataset.eq;
-        const idx = draft.equipment.indexOf(val);
-        if (idx === -1) draft.equipment.push(val);
-        else draft.equipment.splice(idx, 1);
-        renderProfile();
-      });
-    });
+function openSettings(tab = "ai") {
+  if (state.view !== "settings") {
+    state.prevView = state.view || "home";
+  }
+  state.settingsTab = tab;
 
-    dialog.querySelector("#kp-allergies").addEventListener("input", (e) => {
-      draft.allergies = e.target.value;
-    });
-    dialog.querySelector("#kp-skill").addEventListener("change", (e) => {
-      draft.skillLevel = e.target.value;
-    });
-    dialog.querySelector("#kp-units").addEventListener("change", (e) => {
-      draft.units = e.target.value;
-    });
-    dialog.querySelector("#kp-servings").addEventListener("input", (e) => {
-      draft.defaultServings = Math.max(1, Math.min(16, Number(e.target.value) || 2));
-    });
-    dialog.querySelector("#kp-pantry").addEventListener("input", (e) => {
-      draft.pantry = e.target.value;
-    });
-    dialog.querySelector("#kp-note").addEventListener("input", (e) => {
-      draft.customNote = e.target.value;
-    });
-
-    dialog.querySelector("#kp-clear").addEventListener("click", () => {
-      Object.assign(draft, structuredClone(DEFAULT_PROFILE));
-      renderProfile();
-    });
-
-    dialog.querySelector("#kp-save").addEventListener("click", () => {
-      state.profile = draft;
-      state.unitSystem = draft.units === "us" ? "us" : "metric";
+  const root = $("#settings-view");
+  renderSettingsView(root, {
+    aiSettings: state.aiSettings,
+    profile: state.profile,
+    activeTab: state.settingsTab,
+    histCount: state.hist.length,
+    savedCount: state.saved.length,
+    onBack: () => {
+      const target = state.prevView && state.prevView !== "settings" ? state.prevView : "home";
+      showView(target);
+    },
+    onTabChange: (nextTab) => {
+      state.settingsTab = nextTab;
+      $("#ai-btn")?.classList.toggle("is-active", state.view === "settings" && state.settingsTab !== "kitchen");
+      $("#kitchen-btn")?.classList.toggle("is-active", state.view === "settings" && state.settingsTab === "kitchen");
+    },
+    onSaveAi: (nextAi) => {
+      state.aiSettings = saveAiSettings(nextAi);
+      updateAiHeaderBadge();
+      if (state.view === "recipe") renderRecipe();
+      return state.aiSettings;
+    },
+    onSaveProfile: (nextKp) => {
+      state.profile = structuredClone(nextKp);
+      state.unitSystem = state.profile.units === "us" ? "us" : "metric";
       saveJson("mise:profile", state.profile);
       updateKitchenDot();
       if (state.view === "recipe") renderRecipe();
-      closeTopLayer(dialog);
-    });
-  };
+      return state.profile;
+    },
+    onClearKeys: () => {
+      state.aiSettings = clearAllApiKeys(state.aiSettings);
+      updateAiHeaderBadge();
+      return state.aiSettings;
+    },
+    onClearHistory: () => {
+      state.hist = [];
+      saveJson("mise:hist", state.hist);
+      renderLibrary();
+    },
+    onResetAll: () => {
+      state.aiSettings = saveAiSettings(createDefaultAiSettings());
+      state.profile = structuredClone(DEFAULT_PROFILE);
+      state.unitSystem = "metric";
+      state.hist = [];
+      state.saved = [];
+      saveJson("mise:profile", state.profile);
+      saveJson("mise:hist", state.hist);
+      saveJson("mise:saved", state.saved);
+      updateAiHeaderBadge();
+      updateKitchenDot();
+      renderLibrary();
+      return { aiSettings: state.aiSettings, profile: state.profile };
+    },
+    onFetchModels: (providerId, cfg, signal) => fetchProviderModels(providerId, cfg, { signal }),
+    onTestConnection: (settings, signal) => testProviderConnection(settings, { signal })
+  });
 
-  renderProfile();
-  dialog.showModal();
+  showView("settings");
+  $("#settings-heading")?.focus();
 }
 
 /* ---------------- Bootstrap & Event Wiring ---------------- */
 
-async function init() {
+function init() {
   initThemeToggle($("#theme-btn"));
-  setupModalDialog($("#ai-dialog"));
-  setupModalDialog($("#kitchen-dialog"));
 
   cookMode = new CookModeController($("#cook-dialog"), {
     timerManager,
@@ -2180,8 +1978,8 @@ async function init() {
     state.ideasImageController?.abort();
     showView("home");
   });
-  $("#ai-btn").addEventListener("click", openAiDialog);
-  $("#kitchen-btn").addEventListener("click", openKitchenDialog);
+  $("#ai-btn").addEventListener("click", () => openSettings("ai"));
+  $("#kitchen-btn").addEventListener("click", () => openSettings("kitchen"));
 
   $("#ing-toggle-btn").addEventListener("click", () => {
     state.ingDrawerOpen = !state.ingDrawerOpen;
@@ -2337,13 +2135,6 @@ async function init() {
   renderLibrary();
   updateKitchenDot();
   updateAiHeaderBadge();
-
-  try {
-    state.health = await getHealth();
-    updateAiHeaderBadge();
-  } catch {
-    // Non-fatal if restarting
-  }
 }
 
 init();

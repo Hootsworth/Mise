@@ -340,9 +340,7 @@ export function buildEnrichPrompt({ recipe, section, profile = {} } = {}) {
 
   const shape = shapes[section];
   if (!shape) {
-    const err = new Error(`Unsupported enrichment section: ${section}`);
-    err.status = 400;
-    throw err;
+    throw new Error(`Unsupported enrichment section: ${section}`);
   }
 
   const system = [

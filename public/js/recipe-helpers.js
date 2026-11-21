@@ -1,50 +1,6 @@
 /**
- * Shared pure HTTP helpers (origin CORS policy + payload validation/normalization)
- * used by both Node (`server.mjs`) and Cloudflare Workers (`worker/index.mjs`).
+ * Shared recipe & dish-options validation and normalization (pure ES module, zero Node APIs).
  */
-
-export function isOriginAllowed(origin, env = {}) {
-  if (!origin) return false;
-  let parsed;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return false;
-  }
-
-  const normalized = `${parsed.protocol}//${parsed.host}`.toLowerCase();
-  if (
-    normalized === "https://adityapdixit.me" ||
-    normalized === "http://adityapdixit.me" ||
-    normalized === "https://hootsworth.github.io"
-  ) {
-    return true;
-  }
-
-  if (
-    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-    (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1")
-  ) {
-    return true;
-  }
-
-  const extra = String(env.ALLOWED_ORIGINS || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase().replace(/\/+$/, ""))
-    .filter(Boolean);
-  return extra.includes(normalized);
-}
-
-export function buildCorsHeaders(origin, env = {}) {
-  if (!origin || !isOriginAllowed(origin, env)) return {};
-  return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Max-Age": "86400",
-    Vary: "Origin"
-  };
-}
 
 export function isValidRecipe(recipe) {
   return Boolean(

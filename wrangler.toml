@@ -1,3 +1,0 @@
-name = "mise-api"
-main = "worker/index.mjs"
-compatibility_date = "2025-05-01"

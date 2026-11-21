@@ -1,84 +1,171 @@
-import { fetchOpenDishPhoto } from "./open-images.js";
+import {
+  PROVIDERS,
+  PROVIDER_ORDER,
+  createDefaultAiSettings,
+  loadAiSettings,
+  saveAiSettings,
+  clearAllApiKeys,
+  getProviderConfig,
+  isProviderReady,
+  hasAnyReadyProvider,
+  canGenerateAiImage,
+  formatActiveProviderBadge,
+  fetchProviderModels,
+  testProviderConnection,
+  extractJsonObject,
+  streamCompletionDirect,
+  completeJsonDirect,
+  generateDishImageDirect
+} from "./ai-client.js";
+import {
+  buildIdeasPrompt,
+  buildGeneratePrompt,
+  buildRevisePrompt,
+  buildIngredientIntelPrompt,
+  buildApplySwapPrompt,
+  buildStepHelpPrompt,
+  buildEnrichPrompt
+} from "./prompts.js";
+import { isValidRecipe, normalizeRecipe, normalizeIdeasPayload } from "./recipe-helpers.js";
 
-const PROVIDER_STORAGE_KEY = "mise:provider";
-const AI_IMAGES_STORAGE_KEY = "mise:ai_images";
+export {
+  PROVIDERS,
+  PROVIDER_ORDER,
+  createDefaultAiSettings,
+  loadAiSettings,
+  saveAiSettings,
+  clearAllApiKeys,
+  getProviderConfig,
+  isProviderReady,
+  hasAnyReadyProvider,
+  canGenerateAiImage,
+  formatActiveProviderBadge,
+  fetchProviderModels,
+  testProviderConnection
+};
 
-export function apiUrl(path) {
-  const base = String(window.__MISE_CONFIG__?.apiBaseUrl || "").trim().replace(/\/+$/, "");
-  return `${base}${path}`;
-}
+const MAX_IMAGE_CACHE = 40;
+const imageCache = new Map();
 
-export function loadSelectedProvider() {
-  try {
-    return localStorage.getItem(PROVIDER_STORAGE_KEY) || "";
-  } catch {
-    return "";
+function rememberImage(key, result) {
+  if (!result?.imageUrl) return;
+  if (imageCache.has(key)) imageCache.delete(key);
+  imageCache.set(key, result);
+  if (imageCache.size > MAX_IMAGE_CACHE) {
+    imageCache.delete(imageCache.keys().next().value);
   }
 }
 
-export function saveSelectedProvider(provider) {
-  try {
-    if (provider) localStorage.setItem(PROVIDER_STORAGE_KEY, provider);
-    else localStorage.removeItem(PROVIDER_STORAGE_KEY);
-  } catch {
-    // Storage unavailable
-  }
-}
+export async function postJson(endpoint, payload = {}, signal) {
+  const settings = payload.settings || loadAiSettings();
 
-export function loadAiImagesOptIn() {
-  try {
-    return localStorage.getItem(AI_IMAGES_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-export function saveAiImagesOptIn(enabled) {
-  try {
-    if (enabled) localStorage.setItem(AI_IMAGES_STORAGE_KEY, "true");
-    else localStorage.removeItem(AI_IMAGES_STORAGE_KEY);
-  } catch {
-    // Storage unavailable
-  }
-}
-
-export function getActiveProvider() {
-  return loadSelectedProvider() || "";
-}
-
-export async function getHealth() {
-  try {
-    const res = await fetch(apiUrl("/api/health"));
-    const ct = res.headers.get("content-type") || "";
-    if (!res.ok || !ct.includes("application/json")) {
-      throw new Error("Static-only mode");
+  if (endpoint === "/api/ideas") {
+    const query = String(payload.query || "").trim();
+    const ingredients = Array.isArray(payload.ingredients) ? payload.ingredients : [];
+    const images = Array.isArray(payload.images) ? payload.images : [];
+    if (!query && !ingredients.length && !images.length) {
+      throw new Error("Enter ingredients, a dish idea, or attach a photo first.");
     }
-    return await res.json();
-  } catch {
-    return {
-      ok: false,
-      staticOnly: true,
-      defaultProvider: "gemini",
-      imageGenerationAvailable: true,
-      aiImageGenerationAvailable: false,
-      providers: []
-    };
+    const prompt = buildIdeasPrompt({
+      query,
+      ingredients,
+      mode: payload.mode || "any",
+      hasImages: images.length > 0,
+      excludeTitles: payload.excludeTitles,
+      refinement: payload.refinement,
+      profile: payload.profile
+    });
+    const raw = await completeJsonDirect(
+      {
+        settings,
+        providerId: payload.provider,
+        images,
+        system: prompt.system,
+        userText: prompt.userText,
+        jsonMode: true
+      },
+      signal
+    );
+    if (raw?.error) throw new Error(String(raw.error));
+    const normalized = normalizeIdeasPayload(raw);
+    if (!normalized) throw new Error("Could not build dish options. Try rephrasing.");
+    return normalized;
   }
-}
 
-export async function postJson(path, payload, signal) {
-  const provider = payload.provider || getActiveProvider();
-  const res = await fetch(apiUrl(path), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, ...(provider ? { provider } : {}) }),
-    signal
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status}).`);
+  if (endpoint === "/api/ingredient-intel") {
+    if (!isValidRecipe(payload.recipe) || payload.ingredientIndex == null) {
+      throw new Error("Recipe and ingredientIndex are required.");
+    }
+    const idx = Number(payload.ingredientIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= payload.recipe.ingredients.length) {
+      throw new Error("Ingredient index out of range.");
+    }
+    const prompt = buildIngredientIntelPrompt({
+      recipe: payload.recipe,
+      ingredientIndex: idx,
+      question: payload.question,
+      profile: payload.profile
+    });
+    return await completeJsonDirect(
+      {
+        settings,
+        providerId: payload.provider,
+        system: prompt.system,
+        userText: prompt.userText,
+        jsonMode: true
+      },
+      signal
+    );
   }
-  return data;
+
+  if (endpoint === "/api/step-help") {
+    if (!isValidRecipe(payload.recipe) || payload.stepIndex == null || !String(payload.question || "").trim()) {
+      throw new Error("Recipe, stepIndex, and a question are required.");
+    }
+    const idx = Number(payload.stepIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= payload.recipe.steps.length) {
+      throw new Error("Step index out of range.");
+    }
+    const prompt = buildStepHelpPrompt({
+      recipe: payload.recipe,
+      stepIndex: idx,
+      question: payload.question,
+      profile: payload.profile
+    });
+    return await completeJsonDirect(
+      {
+        settings,
+        providerId: payload.provider,
+        system: prompt.system,
+        userText: prompt.userText,
+        jsonMode: true
+      },
+      signal
+    );
+  }
+
+  if (endpoint === "/api/enrich") {
+    if (!isValidRecipe(payload.recipe) || !payload.section) {
+      throw new Error("Recipe and section are required.");
+    }
+    const prompt = buildEnrichPrompt({
+      recipe: payload.recipe,
+      section: payload.section,
+      profile: payload.profile
+    });
+    return await completeJsonDirect(
+      {
+        settings,
+        providerId: payload.provider,
+        system: prompt.system,
+        userText: prompt.userText,
+        jsonMode: true
+      },
+      signal
+    );
+  }
+
+  throw new Error(`Unsupported local AI action: ${endpoint}`);
 }
 
 export async function fetchDishIdeas(payload, signal) {
@@ -86,112 +173,130 @@ export async function fetchDishIdeas(payload, signal) {
 }
 
 /**
- * Fetches a dish image via the server/Worker `/api/dish-image` endpoint (default open-image waterfall;
- * opt-in AI when `payload.useAi` is true). Falls back directly to client-side open image APIs when static-only.
+ * Resolves dish photography via open endpoints by default (`useAi: false`),
+ * or via the configured BYOK image provider when explicitly opted in (`useAi: true`).
  */
-export async function fetchDishImage(payload, signal) {
-  const body = {
-    ...payload,
-    useAi: Boolean(payload.useAi),
-    excludeUrls: Array.isArray(payload.excludeUrls) ? payload.excludeUrls : [],
-    ...(getActiveProvider() ? { provider: getActiveProvider() } : {})
-  };
-
-  try {
-    const res = await fetch(apiUrl("/api/dish-image"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal
-    });
-    const ct = res.headers.get("content-type") || "";
-    if (res.ok && ct.includes("application/json")) {
-      return await res.json();
-    }
-  } catch {
-    // Fall through to client-side open photo lookup when backend is unavailable
+export async function fetchDishImage(payload = {}, signal) {
+  const settings = payload.settings || loadAiSettings();
+  const title = String(payload.title || "").trim();
+  if (!title) {
+    return { imageUrl: null, source: "none", credit: "", creditUrl: "" };
   }
 
-  if (!body.useAi) {
-    return await fetchOpenDishPhoto({
-      title: payload.title,
-      cuisine: payload.cuisine,
-      excludeUrls: body.excludeUrls,
-      signal
-    });
+  const useAi = Boolean(payload.useAi);
+  const excludeUrls = Array.isArray(payload.excludeUrls) ? payload.excludeUrls : [];
+  const visualPrompt = String(payload.visualPrompt || "").trim();
+  const cacheKey = `${useAi ? "ai" : "open"}|${title.toLowerCase()}|${visualPrompt.toLowerCase()}`;
+
+  if (!payload.forceRefresh && excludeUrls.length === 0 && imageCache.has(cacheKey)) {
+    const cached = imageCache.get(cacheKey);
+    imageCache.delete(cacheKey);
+    imageCache.set(cacheKey, cached);
+    return { ...cached, cached: true };
   }
 
-  return { imageUrl: null, source: "none", credit: "", creditUrl: "" };
-}
-
-/**
- * Streams an SSE endpoint (`/api/generate`, `/api/revise`, `/api/apply-swap`)
- * across arbitrary chunk boundaries.
- */
-export async function streamRecipeEndpoint(path, payload, { onDelta, onDone, onError, signal } = {}) {
-  const provider = payload.provider || getActiveProvider();
-  const res = await fetch(apiUrl(path), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, ...(provider ? { provider } : {}) }),
+  const result = await generateDishImageDirect({
+    settings,
+    title,
+    tagline: payload.tagline,
+    cuisine: payload.cuisine,
+    visualPrompt,
+    useAi,
+    excludeUrls,
     signal
   });
 
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    const err = new Error(errData.error || `Request failed (${res.status}).`);
-    if (onError) onError(err);
+  rememberImage(cacheKey, result);
+  return result;
+}
+
+/**
+ * Executes a recipe streaming workflow (`/api/generate`, `/api/revise`, `/api/apply-swap`)
+ * directly in the browser against the configured BYOK AI provider.
+ */
+export async function streamRecipeEndpoint(endpoint, payload = {}, { onDelta, onDone, onError, signal } = {}) {
+  const settings = payload.settings || loadAiSettings();
+  let prompt;
+  let images = [];
+
+  if (endpoint === "/api/generate") {
+    const query = String(payload.query || "").trim();
+    const ingredients = Array.isArray(payload.ingredients) ? payload.ingredients : [];
+    images = Array.isArray(payload.images) ? payload.images : [];
+    const selectedOption =
+      payload.selectedOption && typeof payload.selectedOption === "object" ? payload.selectedOption : null;
+    if (!query && !ingredients.length && !images.length && !selectedOption?.title) {
+      throw new Error("Ask for a dish, add ingredients, or attach a photo first.");
+    }
+    prompt = buildGeneratePrompt({
+      query,
+      ingredients,
+      selectedOption,
+      mode: payload.mode || "any",
+      hasImages: images.length > 0,
+      profile: payload.profile
+    });
+  } else if (endpoint === "/api/revise") {
+    if (!isValidRecipe(payload.recipe)) {
+      throw new Error("A valid current recipe is required to revise.");
+    }
+    const instruction = String(payload.instruction || "").trim();
+    if (!instruction) {
+      throw new Error("Describe what you want to change.");
+    }
+    prompt = buildRevisePrompt({
+      recipe: payload.recipe,
+      instruction,
+      profile: payload.profile
+    });
+  } else if (endpoint === "/api/apply-swap") {
+    if (!isValidRecipe(payload.recipe) || payload.ingredientIndex == null || !payload.swap) {
+      throw new Error("Recipe, ingredientIndex, and swap are required.");
+    }
+    const idx = Number(payload.ingredientIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= payload.recipe.ingredients.length) {
+      throw new Error("Ingredient index out of range.");
+    }
+    prompt = buildApplySwapPrompt({
+      recipe: payload.recipe,
+      ingredientIndex: idx,
+      swap: payload.swap,
+      profile: payload.profile
+    });
+  } else {
+    throw new Error(`Unsupported streaming action: ${endpoint}`);
+  }
+
+  try {
+    const fullText = await streamCompletionDirect(
+      {
+        settings,
+        providerId: payload.provider,
+        images,
+        system: prompt.system,
+        userText: prompt.userText,
+        jsonMode: true
+      },
+      (delta) => {
+        if (delta && onDelta) onDelta(delta);
+      },
+      signal
+    );
+
+    const parsed = extractJsonObject(fullText);
+    if (parsed?.error) {
+      throw new Error(String(parsed.error));
+    }
+
+    const recipe = normalizeRecipe(parsed);
+    if (!isValidRecipe(recipe)) {
+      throw new Error("The recipe came back incomplete. Try rephrasing or switching AI providers in Settings.");
+    }
+
+    if (onDone) onDone(recipe);
+    return recipe;
+  } catch (err) {
+    if (onError && err?.name !== "AbortError") onError(err);
     throw err;
   }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let donePayload = null;
-
-  const dispatchFrame = (rawFrame) => {
-    if (!rawFrame.trim()) return;
-    let eventName = "message";
-    const dataLines = [];
-    for (const line of rawFrame.split(/\r?\n/)) {
-      if (line.startsWith("event:")) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trim());
-      }
-    }
-    if (!dataLines.length) return;
-    let data;
-    try {
-      data = JSON.parse(dataLines.join("\n"));
-    } catch {
-      return;
-    }
-    if (eventName === "delta" && data.text) {
-      if (onDelta) onDelta(data.text);
-    } else if (eventName === "done" && data.recipe) {
-      donePayload = data.recipe;
-      if (onDone) onDone(data.recipe);
-    } else if (eventName === "error") {
-      const err = new Error(data.message || "AI stream error.");
-      if (onError) onError(err);
-      throw err;
-    }
-  };
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split(/\r?\n\r?\n/);
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      dispatchFrame(frame);
-    }
-  }
-  if (buffer.trim()) {
-    dispatchFrame(buffer);
-  }
-
-  return donePayload;
 }

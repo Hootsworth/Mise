@@ -13,7 +13,7 @@ try {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./styles.css?v=3">
 </head>
 <body>
 <div class="wrap">
@@ -81,6 +81,7 @@ try {
 
   <main id="ideas-view" hidden></main>
   <main id="view" hidden></main>
+  <main id="settings-view" hidden></main>
   <div id="view-err" class="err" hidden></div>
 </div>
 
@@ -128,11 +129,8 @@ try {
 <div id="ing-popover" popover="auto" class="ai-pop" aria-label="Ingredient intelligence"></div>
 <div id="step-popover" popover="auto" class="ai-pop" aria-label="Ask chef about this step"></div>
 
-<dialog id="ai-dialog" class="modal-sheet" closedby="any" aria-labelledby="ai-dialog-title"></dialog>
-<dialog id="kitchen-dialog" class="modal-sheet" closedby="any" aria-labelledby="kitchen-dialog-title"></dialog>
 <dialog id="cook-dialog" class="cook-sheet" closedby="closerequest" aria-labelledby="cook-dialog-title"></dialog>
 
-<script src="./config.js"></script>
-<script type="module" src="./js/app.js"></script>
+<script type="module" src="./js/app.js?v=3"></script>
 </body>
 </html>
