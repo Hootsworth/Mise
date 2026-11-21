@@ -37,13 +37,19 @@ const esc = (s) =>
   }[c]));
 
 const SUGG = [
-  "Weeknight pasta, 20 minutes",
-  "Something with miso, mushrooms, and tofu",
-  "Crispy tofu, no fuss",
-  "Chicken, lemon, garlic, thyme",
+  "Weeknight miso pasta",
   "Something with leftover rice",
-  "A cake with no oven"
+  "Crispy tofu, no fuss"
 ];
+
+const MODE_LABELS = {
+  any: "Mode",
+  fridge: "What I have",
+  craving: "Ingredient X",
+  recreate: "Recreate",
+  mealprep: "Meal prep",
+  drink: "Drink"
+};
 
 const TWEAKS = [
   "Make it vegan",
@@ -56,7 +62,7 @@ const TWEAKS = [
 ];
 
 const MODE_PLACEHOLDERS = {
-  any: "Miso mushroom pasta, or eggs and rice",
+  any: "A dish, ingredients you have, or a craving…",
   fridge: "Any extras or cravings? (optional)",
   craving: "Describe the vibe, or add ingredient X above",
   recreate: "Describe a restaurant dish or drop a photo",
@@ -142,6 +148,7 @@ function saveJson(key, val) {
 const state = {
   view: "home", // "home" | "ideas" | "recipe"
   mode: "any",
+  ingDrawerOpen: false,
   libTab: "recent",
   images: [], // attached input photos [{ id, mimeType, dataUrl, name }]
   ingredientTags: [],
@@ -260,7 +267,26 @@ function hidePopovers() {
 
 function syncModeUi() {
   const isExploreMode = state.mode === "fridge" || state.mode === "craving";
-  $("#ing-tags-bar").hidden = !isExploreMode && state.ingredientTags.length === 0;
+  const showTags = state.ingDrawerOpen || isExploreMode || state.ingredientTags.length > 0;
+  $("#ing-tags-bar").hidden = !showTags;
+  const ingBtn = $("#ing-toggle-btn");
+  if (ingBtn) {
+    ingBtn.textContent = state.ingredientTags.length
+      ? `Ingredients (${state.ingredientTags.length})`
+      : "+ Ingredients";
+    ingBtn.classList.toggle("is-active", showTags);
+    ingBtn.setAttribute("aria-expanded", String(showTags));
+  }
+  const modeBtn = $("#mode-btn");
+  if (modeBtn) {
+    modeBtn.textContent = state.mode === "any" ? "Mode" : MODE_LABELS[state.mode] || "Mode";
+    modeBtn.classList.toggle("is-active", state.mode !== "any");
+  }
+  document.querySelectorAll("#mode-popover [data-mode]").forEach((b) => {
+    const active = b.dataset.mode === state.mode;
+    b.classList.toggle("is-active", active);
+    b.setAttribute("aria-checked", String(active));
+  });
   $("#q").placeholder = MODE_PLACEHOLDERS[state.mode] || MODE_PLACEHOLDERS.any;
   $("#cook-submit").textContent = isExploreMode ? "Find ideas" : "Cook";
   $("#alt-submit").textContent = isExploreMode ? "Single recipe" : "Options grid";
@@ -1861,12 +1887,23 @@ function updateAiHeaderBadge() {
   $("#ai-label").textContent = active ? active.label.replace(/^Google |^Anthropic |^Local /, "") : "Provider";
 
   const note = $("#ai-note");
+  const wireSamplesBtn = () => {
+    $("#open-samples-from-note")?.addEventListener("click", () => {
+      const disc = $("#samples-disclosure");
+      if (disc) {
+        disc.open = true;
+        disc.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    });
+  };
   if (state.health?.staticOnly) {
     note.hidden = false;
-    note.innerHTML = `Static Pages mode active — sample recipes, Cook Mode, and open food photography work out of the box. Connect a Cloudflare Worker backend via GitHub Secrets to unlock live AI generation.`;
+    note.innerHTML = `Static mode active — <button type="button" class="link-btn" id="open-samples-from-note">browse samples</button> or connect a Cloudflare Worker in GitHub Secrets.`;
+    wireSamplesBtn();
   } else if (state.health && !hasAnyConfiguredProvider()) {
     note.hidden = false;
-    note.innerHTML = `No server AI keys configured yet (add them as GitHub Secrets or <code>.env</code>). <button type="button" class="link-btn" id="open-ai-from-note">View providers</button> or explore the samples above.`;
+    note.innerHTML = `No AI key configured — <button type="button" class="link-btn" id="open-samples-from-note">browse samples</button> or <button type="button" class="link-btn" id="open-ai-from-note">choose provider</button>.`;
+    wireSamplesBtn();
     $("#open-ai-from-note")?.addEventListener("click", openAiDialog);
   } else {
     note.hidden = true;
@@ -2130,7 +2167,11 @@ async function init() {
     renderTimerBar(timers);
   });
 
-  $("#sugg").innerHTML = SUGG.map((s) => `<button type="button" class="chip">${esc(s)}</button>`).join("");
+  $("#sugg").innerHTML =
+    `<span class="prompts-label">Try</span>` +
+    SUGG.map((s) => `<button type="button" class="prompt-link">${esc(s)}</button>`).join(
+      `<span aria-hidden="true">·</span>`
+    );
   $("#tweaks").innerHTML = TWEAKS.map((s) => `<button type="button" class="chip">${esc(s)}</button>`).join("");
 
   $("#home-btn").addEventListener("click", () => {
@@ -2142,15 +2183,29 @@ async function init() {
   $("#ai-btn").addEventListener("click", openAiDialog);
   $("#kitchen-btn").addEventListener("click", openKitchenDialog);
 
-  $("#mode-row").addEventListener("click", (e) => {
+  $("#ing-toggle-btn").addEventListener("click", () => {
+    state.ingDrawerOpen = !state.ingDrawerOpen;
+    syncModeUi();
+    if (state.ingDrawerOpen) {
+      $("#ing-tag-input")?.focus();
+    }
+  });
+
+  $("#mode-popover").addEventListener("click", (e) => {
     const btn = e.target.closest("[data-mode]");
     if (!btn) return;
     state.mode = btn.dataset.mode;
-    document.querySelectorAll("#mode-row [data-mode]").forEach((b) => {
-      b.classList.toggle("is-active", b === btn);
-      b.setAttribute("aria-pressed", String(b === btn));
-    });
+    const isExplore = state.mode === "fridge" || state.mode === "craving";
+    state.ingDrawerOpen = isExplore;
     syncModeUi();
+    try {
+      $("#mode-popover").hidePopover();
+    } catch {
+      // Ignore
+    }
+    if (isExplore) {
+      $("#ing-tag-input")?.focus();
+    }
   });
 
   $("#ing-tag-input").addEventListener("keydown", (e) => {
@@ -2196,7 +2251,7 @@ async function init() {
   });
 
   $("#sugg").addEventListener("click", (e) => {
-    const chip = e.target.closest(".chip");
+    const chip = e.target.closest(".prompt-link");
     if (!chip) return;
     $("#q").value = chip.textContent;
     handleHomeSubmit({ forceMode: "auto" });

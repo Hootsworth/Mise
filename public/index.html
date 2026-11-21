@@ -33,13 +33,16 @@ try {
   <main id="home-view">
     <h1>Ask for any dish.<br>Get the recipe.</h1>
 
-    <div class="mode-row" id="mode-row" role="group" aria-label="Creation mode">
-      <button type="button" class="chip is-active" data-mode="any" aria-pressed="true">Any dish</button>
-      <button type="button" class="chip" data-mode="fridge" aria-pressed="false">What I have</button>
-      <button type="button" class="chip" data-mode="craving" aria-pressed="false">With ingredient X</button>
-      <button type="button" class="chip" data-mode="recreate" aria-pressed="false">Recreate</button>
-      <button type="button" class="chip" data-mode="mealprep" aria-pressed="false">Meal prep</button>
-      <button type="button" class="chip" data-mode="drink" aria-pressed="false">Drink</button>
+    <form class="ask home-ask" id="ask-form" onsubmit="return false">
+      <input id="q" type="text" autocomplete="off" placeholder="A dish, ingredients you have, or a craving…" aria-label="What do you want to cook?">
+      <button class="go" id="cook-submit" type="submit">Cook</button>
+    </form>
+
+    <div class="home-actions" role="group" aria-label="Input options">
+      <button type="button" class="quiet-act" id="ing-toggle-btn" aria-expanded="false">+ Ingredients</button>
+      <label class="quiet-act" for="photo-input" title="Attach fridge or dish photo (or drag & paste)">Photo<input id="photo-input" type="file" accept="image/*" multiple hidden></label>
+      <button type="button" class="quiet-act" id="alt-submit">Options grid</button>
+      <button type="button" class="quiet-act mode-trigger" id="mode-btn" popovertarget="mode-popover">Mode</button>
     </div>
 
     <div class="ing-tags-bar" id="ing-tags-bar" hidden>
@@ -50,27 +53,19 @@ try {
       </div>
     </div>
 
-    <form class="ask home-ask" id="ask-form" onsubmit="return false">
-      <input id="q" type="text" autocomplete="off" placeholder="Miso mushroom pasta, or eggs and rice" aria-label="What do you want to cook?">
-      <label class="photo-btn" for="photo-input" title="Attach fridge or dish photo (or drag & paste)">
-        <span>Photo</span>
-        <input id="photo-input" type="file" accept="image/*" multiple hidden>
-      </label>
-      <button class="tbtn alt-submit" id="alt-submit" type="button">Options grid</button>
-      <button class="go" id="cook-submit" type="submit">Cook</button>
-    </form>
-
     <div class="photo-strip" id="photo-strip" hidden></div>
-    <div class="chips" id="sugg"></div>
+    <div class="home-prompts" id="sugg" aria-label="Try a prompt"></div>
 
-    <div class="home-samples">
-      <span>Test-kitchen samples:</span>
-      <button type="button" class="link-btn" id="sample-ideas-btn">Browse dish options grid</button>
-      <span aria-hidden="true">·</span>
-      <button type="button" class="link-btn" data-sample="0">Brown Butter Miso Rigatoni</button>
-      <span aria-hidden="true">·</span>
-      <button type="button" class="link-btn" data-sample="1">Black Sesame Skillet Cookie</button>
-    </div>
+    <details class="home-disclosure" id="samples-disclosure">
+      <summary>Test-kitchen samples</summary>
+      <div class="disclosure-body">
+        <button type="button" class="link-btn" id="sample-ideas-btn">Dish options grid</button>
+        <span aria-hidden="true">·</span>
+        <button type="button" class="link-btn" data-sample="0">Brown Butter Miso Rigatoni</button>
+        <span aria-hidden="true">·</span>
+        <button type="button" class="link-btn" data-sample="1">Black Sesame Skillet Cookie</button>
+      </div>
+    </details>
 
     <p class="note" id="ai-note" hidden></p>
     <div id="home-err" class="err" hidden></div>
@@ -104,6 +99,32 @@ try {
   </div>
 </div>
 
+<div id="mode-popover" popover="auto" class="mode-pop" role="radiogroup" aria-label="Cooking mode">
+  <button type="button" class="mode-opt is-active" role="radio" aria-checked="true" data-mode="any">
+    <strong>Any dish</strong>
+    <small>Direct recipe or open prompt</small>
+  </button>
+  <button type="button" class="mode-opt" role="radio" aria-checked="false" data-mode="fridge">
+    <strong>What I have</strong>
+    <small>Cook with ingredients on hand</small>
+  </button>
+  <button type="button" class="mode-opt" role="radio" aria-checked="false" data-mode="craving">
+    <strong>With ingredient X</strong>
+    <small>Build around one key item</small>
+  </button>
+  <button type="button" class="mode-opt" role="radio" aria-checked="false" data-mode="recreate">
+    <strong>Recreate</strong>
+    <small>From description or attached photo</small>
+  </button>
+  <button type="button" class="mode-opt" role="radio" aria-checked="false" data-mode="mealprep">
+    <strong>Meal prep</strong>
+    <small>Batch recipes that reheat well</small>
+  </button>
+  <button type="button" class="mode-opt" role="radio" aria-checked="false" data-mode="drink">
+    <strong>Drink</strong>
+    <small>Cocktails, tonics & infusions</small>
+  </button>
+</div>
 <div id="ing-popover" popover="auto" class="ai-pop" aria-label="Ingredient intelligence"></div>
 <div id="step-popover" popover="auto" class="ai-pop" aria-label="Ask chef about this step"></div>
 
