@@ -238,7 +238,32 @@ function resolveRecipeImageMeta(recipe) {
   };
 }
 
+function routeFocusToActiveView(which) {
+  const focusMap = {
+    home: "#home-heading",
+    ideas: "#ideas-heading",
+    recipe: "#recipe-heading",
+    settings: "#settings-heading",
+    onboarding: "#ob-heading"
+  };
+  const target = $(focusMap[which]);
+  if (target) {
+    try {
+      target.focus({ preventScroll: true });
+    } catch {
+      target.focus();
+    }
+  }
+}
+
+function clearTemporaryViewTransitionNames() {
+  document.querySelectorAll(".vt-hero-source").forEach((el) => {
+    el.classList.remove("vt-hero-source");
+  });
+}
+
 function showView(which) {
+  const prevView = state.view;
   state.view = which;
   const views = {
     onboarding: $("#onboarding-view"),
@@ -247,27 +272,62 @@ function showView(which) {
     recipe: $("#view"),
     settings: $("#settings-view")
   };
-  for (const [key, el] of Object.entries(views)) {
-    if (!el) continue;
-    const active = key === which;
-    el.hidden = !active;
-    if (active) {
-      el.classList.remove("view-enter");
-      void el.offsetWidth;
-      el.classList.add("view-enter");
+
+  const activeEl = document.activeElement;
+  const focusWasInsideView =
+    activeEl &&
+    activeEl !== document.body &&
+    Object.entries(views).some(([k, el]) => k !== which && el?.contains(activeEl));
+
+  const applyDomSwitch = () => {
+    for (const [key, el] of Object.entries(views)) {
+      if (!el) continue;
+      const active = key === which;
+      el.hidden = !active;
+      if (active) {
+        el.classList.remove("view-enter");
+        void el.offsetWidth;
+        el.classList.add("view-enter");
+      }
     }
+    $("#dock").hidden = which !== "recipe";
+    const inOnboarding = which === "onboarding";
+    $("#kitchen-btn").hidden = inOnboarding;
+    $("#ai-btn").hidden = inOnboarding;
+    updateCartButton(inOnboarding);
+    $("#ai-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab !== "kitchen");
+    $("#kitchen-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab === "kitchen");
+    $("#home-err").hidden = true;
+    $("#view-err").hidden = true;
+    if (which !== "recipe") hidePopovers();
+    window.scrollTo(0, 0);
+  };
+
+  const canAnimateVT =
+    prevView !== which &&
+    typeof document.startViewTransition === "function" &&
+    (!window.matchMedia || window.matchMedia("(prefers-reduced-motion: no-preference)").matches);
+
+  if (!canAnimateVT) {
+    applyDomSwitch();
+    clearTemporaryViewTransitionNames();
+    if (focusWasInsideView) routeFocusToActiveView(which);
+    return;
   }
-  $("#dock").hidden = which !== "recipe";
-  const inOnboarding = which === "onboarding";
-  $("#kitchen-btn").hidden = inOnboarding;
-  $("#ai-btn").hidden = inOnboarding;
-  updateCartButton(inOnboarding);
-  $("#ai-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab !== "kitchen");
-  $("#kitchen-btn")?.classList.toggle("is-active", which === "settings" && state.settingsTab === "kitchen");
-  $("#home-err").hidden = true;
-  $("#view-err").hidden = true;
-  if (which !== "recipe") hidePopovers();
-  window.scrollTo(0, 0);
+
+  try {
+    const transition = document.startViewTransition(() => {
+      applyDomSwitch();
+    });
+    transition.finished.finally(() => {
+      clearTemporaryViewTransitionNames();
+      if (focusWasInsideView) routeFocusToActiveView(which);
+    });
+  } catch {
+    applyDomSwitch();
+    clearTemporaryViewTransitionNames();
+    if (focusWasInsideView) routeFocusToActiveView(which);
+  }
 }
 
 function showError(msg) {
@@ -549,10 +609,10 @@ function renderLibrary() {
       const cached = state.sessionImageMap.get(String(item.title || "").toLowerCase());
       const thumb = item.imageUrl || (typeof cached === "string" ? cached : cached?.imageUrl) || "";
       return `
-      <div class="lib-row">
+      <div class="lib-row" style="--stagger-i: ${Math.min(idx, 10)}">
         <button type="button" class="lib-open" data-lib-open="${idx}">
           <span class="lib-main">
-            ${thumb ? `<img class="lib-thumb" src="${esc(thumb)}" alt="" loading="lazy" width="48" height="48">` : ""}
+            ${thumb ? `<img class="lib-thumb" src="${esc(thumb)}" alt="" loading="lazy" width="56" height="56">` : ""}
             <span class="lib-title">${esc(item.title)}</span>
           </span>
           <span class="lib-meta">${item.time_minutes ? `${esc(item.time_minutes)} min` : ""}${item.cuisine ? ` · ${esc(item.cuisine)}` : ""}</span>
@@ -584,9 +644,9 @@ function openRecipeInView(recipe, { pushToHistory = false } = {}) {
   state.stepHelpCache.clear();
   state.heroImageLoading = false;
   if (pushToHistory) pushHistory(cloned);
-  showView("recipe");
   renderRecipe();
   renderDock();
+  showView("recipe");
   if (!cloned.imageUrl) {
     hydrateRecipeHeroImage(cloned);
   }
@@ -602,7 +662,7 @@ function renderIdeasView() {
     <div class="ideas-head">
       <div>
         <button type="button" class="tbtn" id="ideas-back-btn">← Back</button>
-        <h2 class="ideas-title">Choose what to make</h2>
+        <h2 class="ideas-title" id="ideas-heading" tabindex="-1">Choose what to make</h2>
         <p class="ideas-sub">${esc(
           data?.prompt_summary ||
             (state.ideasLoading ? "Curating varied dish options for you…" : "Pick a direction to cook in full.")
@@ -670,7 +730,7 @@ function renderIdeasView() {
         : "";
 
       return `
-        <button type="button" class="idea-card" data-pick-idea="${idx}">
+        <button type="button" class="idea-card" data-pick-idea="${idx}" style="--stagger-i: ${Math.min(idx, 10)}">
           <div class="${frameClass}">${frameContent}</div>
           <div class="idea-body">
             <div class="idea-meta">${esc(opt.time_minutes)} min · ${esc(opt.difficulty)}${opt.vibe ? ` · ${esc(opt.vibe)}` : ""}</div>
@@ -716,6 +776,8 @@ function renderIdeasView() {
 
   el.querySelectorAll("[data-pick-idea]").forEach((btn) => {
     btn.addEventListener("click", () => {
+      clearTemporaryViewTransitionNames();
+      btn.querySelector(".dish-frame")?.classList.add("vt-hero-source");
       const option = options[Number(btn.dataset.pickIdea)];
       if (option) cookSelectedOption(option);
     });
@@ -968,7 +1030,7 @@ function renderRecipe() {
       const on = state.checkedIng.has(i) ? "on" : "";
       const revised = diff.changedIngredientIdx.has(i) ? `<span class="rev-tag">revised</span>` : "";
       return `
-        <li class="ing-row ${on}" data-ing-idx="${i}">
+        <li class="ing-row ${on}" data-ing-idx="${i}" style="--stagger-i: ${Math.min(i, 14)}">
           <button type="button" class="ing-check" data-toggle-ing="${i}" aria-pressed="${Boolean(on)}">
             <span class="box" aria-hidden="true"></span>
             <span class="t">
@@ -1001,7 +1063,7 @@ function renderRecipe() {
         .join("");
 
       return `
-        <li class="step-row ${on}" data-step-idx="${i}">
+        <li class="step-row ${on}" data-step-idx="${i}" style="--stagger-i: ${Math.min(i, 14)}">
           <div class="step-body">
             <div class="step-head">
               <button type="button" class="step-toggle" data-toggle-step="${i}" aria-pressed="${Boolean(on)}">
@@ -1079,36 +1141,40 @@ function renderRecipe() {
 
   $("#view").innerHTML = `
     ${toolbarHtml}
-    ${r.cuisine ? `<div class="kicker">${esc(r.cuisine)}</div>` : ""}
-    <h1 class="title">${esc(r.title || "Drafting recipe…")}</h1>
-    ${r.tagline ? `<p class="tag">${esc(r.tagline)}</p>` : ""}
-    ${changeBanner}
-    ${heroHtml}
-    <div class="meta">
-      <div>
-        <small>Time</small>
-        <b>${r.time_minutes ? `${esc(r.time_minutes)} min` : "—"}</b>
-        ${timeDetails.length ? `<span class="meta-sub">${esc(timeDetails.join(" · "))}</span>` : ""}
-      </div>
-      <div>
-        <small>Difficulty</small>
-        <b>${esc(r.difficulty || "—")}</b>
-      </div>
-      <div>
-        <small>Serves</small>
-        <div class="step-ctl">
-          <button type="button" id="dec-sv" aria-label="Fewer servings">−</button>
-          <b id="sv-val">${state.servings}</b>
-          <button type="button" id="inc-sv" aria-label="More servings">+</button>
+    <div class="recipe-masthead ${heroHtml ? "has-hero" : ""}">
+      <div class="recipe-intro">
+        ${r.cuisine ? `<div class="kicker">${esc(r.cuisine)}</div>` : ""}
+        <h1 class="title" id="recipe-heading" tabindex="-1">${esc(r.title || "Drafting recipe…")}</h1>
+        ${r.tagline ? `<p class="tag">${esc(r.tagline)}</p>` : ""}
+        ${changeBanner}
+        <div class="meta">
+          <div>
+            <small>Time</small>
+            <b>${r.time_minutes ? `${esc(r.time_minutes)} min` : "—"}</b>
+            ${timeDetails.length ? `<span class="meta-sub">${esc(timeDetails.join(" · "))}</span>` : ""}
+          </div>
+          <div>
+            <small>Difficulty</small>
+            <b>${esc(r.difficulty || "—")}</b>
+          </div>
+          <div>
+            <small>Serves</small>
+            <div class="step-ctl">
+              <button type="button" id="dec-sv" aria-label="Fewer servings">−</button>
+              <b id="sv-val">${state.servings}</b>
+              <button type="button" id="inc-sv" aria-label="More servings">+</button>
+            </div>
+          </div>
+          <div>
+            <small>Units</small>
+            <div class="unit-seg" role="group" aria-label="Unit system">
+              <button type="button" class="seg-btn ${state.unitSystem === "metric" ? "is-active" : ""}" data-unit="metric">Metric</button>
+              <button type="button" class="seg-btn ${state.unitSystem === "us" ? "is-active" : ""}" data-unit="us">US</button>
+            </div>
+          </div>
         </div>
       </div>
-      <div>
-        <small>Units</small>
-        <div class="unit-seg" role="group" aria-label="Unit system">
-          <button type="button" class="seg-btn ${state.unitSystem === "metric" ? "is-active" : ""}" data-unit="metric">Metric</button>
-          <button type="button" class="seg-btn ${state.unitSystem === "us" ? "is-active" : ""}" data-unit="us">US</button>
-        </div>
-      </div>
+      ${heroHtml}
     </div>
 
     ${
@@ -1306,10 +1372,21 @@ function bindRecipeEvents() {
 
   $("#print-btn", view)?.addEventListener("click", () => window.print());
 
+  const pulseQuantities = () => {
+    const viewEl = $("#view");
+    if (!viewEl) return;
+    viewEl.querySelectorAll("#sv-val, .amt").forEach((node) => {
+      node.classList.remove("is-popping");
+      void node.offsetWidth;
+      node.classList.add("is-popping");
+    });
+  };
+
   $("#dec-sv", view)?.addEventListener("click", () => {
     if (state.servings > 1) {
       state.servings--;
       renderRecipe();
+      pulseQuantities();
     }
   });
 
@@ -1317,6 +1394,7 @@ function bindRecipeEvents() {
     if (state.servings < 24) {
       state.servings++;
       renderRecipe();
+      pulseQuantities();
     }
   });
 
@@ -1326,6 +1404,7 @@ function bindRecipeEvents() {
       if (next && next !== state.unitSystem) {
         state.unitSystem = next;
         renderRecipe();
+        pulseQuantities();
       }
     });
   });
@@ -2326,6 +2405,8 @@ async function init() {
   $("#rlist").addEventListener("click", (e) => {
     const openBtn = e.target.closest("[data-lib-open]");
     if (openBtn) {
+      clearTemporaryViewTransitionNames();
+      openBtn.querySelector(".lib-thumb")?.classList.add("vt-hero-source");
       const list = state.libTab === "saved" ? state.saved : state.hist;
       const entry = list[Number(openBtn.dataset.libOpen)];
       if (entry?.recipe) openRecipeInView(entry.recipe, { pushToHistory: false });

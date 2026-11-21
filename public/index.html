@@ -14,7 +14,7 @@ try {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="./styles.css?v=9">
+<link rel="stylesheet" href="./styles.css?v=10">
 </head>
 <body>
 <div class="wrap">
@@ -33,52 +33,57 @@ try {
   </header>
 
   <main id="home-view">
-    <h1>Ask for any dish.<br>Get the recipe.</h1>
+    <div class="home-stage">
+      <div class="home-primary">
+        <div class="home-kicker">Culinary Atelier</div>
+        <h1 id="home-heading" tabindex="-1">Ask for any dish.<br>Get the recipe.</h1>
 
-    <form class="ask home-ask" id="ask-form" onsubmit="return false">
-      <input id="q" type="text" autocomplete="off" placeholder="A dish, ingredients you have, or a craving…" aria-label="What do you want to cook?">
-      <button class="go" id="cook-submit" type="submit">Cook</button>
-    </form>
+        <form class="ask home-ask" id="ask-form" onsubmit="return false">
+          <input id="q" type="text" autocomplete="off" placeholder="A dish, ingredients you have, or a craving…" aria-label="What do you want to cook?">
+          <button class="go" id="cook-submit" type="submit">Cook</button>
+        </form>
 
-    <div class="home-actions" role="group" aria-label="Input options">
-      <button type="button" class="quiet-act" id="ing-toggle-btn" aria-expanded="false">+ Ingredients</button>
-      <label class="quiet-act" for="photo-input" title="Attach fridge or dish photo (or drag & paste)">Photo<input id="photo-input" type="file" accept="image/*" multiple hidden></label>
-      <button type="button" class="quiet-act" id="alt-submit">Options grid</button>
-      <button type="button" class="quiet-act mode-trigger" id="mode-btn" popovertarget="mode-popover">Mode</button>
+        <div class="home-actions" role="group" aria-label="Input options">
+          <button type="button" class="quiet-act" id="ing-toggle-btn" aria-expanded="false">+ Ingredients</button>
+          <label class="quiet-act" for="photo-input" title="Attach fridge or dish photo (or drag & paste)">Photo<input id="photo-input" type="file" accept="image/*" multiple hidden></label>
+          <button type="button" class="quiet-act" id="alt-submit">Options grid</button>
+          <button type="button" class="quiet-act mode-trigger" id="mode-btn" popovertarget="mode-popover">Mode</button>
+        </div>
+
+        <div class="ing-tags-bar" id="ing-tags-bar" hidden>
+          <div class="ing-tag-list" id="ing-tag-list"></div>
+          <div class="ing-tag-entry">
+            <input id="ing-tag-input" type="text" autocomplete="off" placeholder="Add an ingredient & press Enter (e.g. miso, mushrooms, eggs)" aria-label="Add ingredient tag">
+            <button type="button" class="tbtn" id="ing-tag-add">Add</button>
+          </div>
+        </div>
+
+        <div class="photo-strip" id="photo-strip" hidden></div>
+        <div class="home-prompts" id="sugg" aria-label="Try a prompt"></div>
+
+        <details class="home-disclosure" id="samples-disclosure">
+          <summary>Test-kitchen samples</summary>
+          <div class="disclosure-body">
+            <button type="button" class="link-btn" id="sample-ideas-btn">Dish options grid</button>
+            <span aria-hidden="true">·</span>
+            <button type="button" class="link-btn" data-sample="0">Brown Butter Miso Rigatoni</button>
+            <span aria-hidden="true">·</span>
+            <button type="button" class="link-btn" data-sample="1">Black Sesame Skillet Cookie</button>
+          </div>
+        </details>
+
+        <p class="note" id="ai-note" hidden></p>
+        <div id="home-err" class="err" hidden></div>
+      </div>
+
+      <section class="library" id="library" hidden aria-label="Your recipes">
+        <div class="lib-tabs">
+          <button type="button" class="lib-tab is-active" data-lib="recent">Recent</button>
+          <button type="button" class="lib-tab" data-lib="saved">Saved <span id="saved-count"></span></button>
+        </div>
+        <div class="rlist" id="rlist"></div>
+      </section>
     </div>
-
-    <div class="ing-tags-bar" id="ing-tags-bar" hidden>
-      <div class="ing-tag-list" id="ing-tag-list"></div>
-      <div class="ing-tag-entry">
-        <input id="ing-tag-input" type="text" autocomplete="off" placeholder="Add an ingredient & press Enter (e.g. miso, mushrooms, eggs)" aria-label="Add ingredient tag">
-        <button type="button" class="tbtn" id="ing-tag-add">Add</button>
-      </div>
-    </div>
-
-    <div class="photo-strip" id="photo-strip" hidden></div>
-    <div class="home-prompts" id="sugg" aria-label="Try a prompt"></div>
-
-    <details class="home-disclosure" id="samples-disclosure">
-      <summary>Test-kitchen samples</summary>
-      <div class="disclosure-body">
-        <button type="button" class="link-btn" id="sample-ideas-btn">Dish options grid</button>
-        <span aria-hidden="true">·</span>
-        <button type="button" class="link-btn" data-sample="0">Brown Butter Miso Rigatoni</button>
-        <span aria-hidden="true">·</span>
-        <button type="button" class="link-btn" data-sample="1">Black Sesame Skillet Cookie</button>
-      </div>
-    </details>
-
-    <p class="note" id="ai-note" hidden></p>
-    <div id="home-err" class="err" hidden></div>
-
-    <section class="library" id="library" hidden aria-label="Your recipes">
-      <div class="lib-tabs">
-        <button type="button" class="lib-tab is-active" data-lib="recent">Recent</button>
-        <button type="button" class="lib-tab" data-lib="saved">Saved <span id="saved-count"></span></button>
-      </div>
-      <div class="rlist" id="rlist"></div>
-    </section>
   </main>
 
   <main id="ideas-view" hidden></main>
@@ -135,6 +140,6 @@ try {
 <dialog id="cook-dialog" class="cook-sheet" closedby="closerequest" aria-labelledby="cook-dialog-title"></dialog>
 <dialog id="order-dialog" class="order-sheet" closedby="any" aria-labelledby="order-dialog-title"></dialog>
 
-<script type="module" src="./js/app.js?v=8"></script>
+<script type="module" src="./js/app.js?v=9"></script>
 </body>
 </html>
