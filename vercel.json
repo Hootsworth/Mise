@@ -1,14 +1,53 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "public",
   "functions": {
-    "api/[...route].mjs": {
+    "api/index.mjs": {
       "maxDuration": 60
     }
   },
   "rewrites": [
     {
+      "source": "/api/health",
+      "destination": "/api/index?__path=/api/health"
+    },
+    {
+      "source": "/api/mcp/:path*",
+      "destination": "/api/index?__path=/api/mcp/:path*"
+    },
+    {
       "source": "/callback",
-      "destination": "/api/mcp/oauth/callback/zepto"
+      "destination": "/api/index?__path=/callback"
+    },
+    {
+      "source": "/favicon.ico",
+      "destination": "/favicon.svg"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    },
+    {
+      "source": "/index.html",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    },
+    {
+      "source": "/styles.css",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    },
+    {
+      "source": "/js/:path*",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
     }
   ]
 }

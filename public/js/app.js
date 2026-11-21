@@ -44,7 +44,7 @@ import {
   extractMissingIngredients
 } from "./delivery-links.js";
 import {
-  isLocalhostRuntime,
+  resolveCompanionOrigin,
   fetchCompanionStatus,
   startOAuthSignIn,
   disconnectMcpProvider,
@@ -2350,7 +2350,7 @@ async function init() {
   updateKitchenDot();
   updateAiHeaderBadge();
 
-  if (isLocalhostRuntime() || state.deliveryPrefs.companionUrl) {
+  if (resolveCompanionOrigin(state.deliveryPrefs)) {
     await refreshMcpStatus();
   }
 

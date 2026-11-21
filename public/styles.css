@@ -2611,10 +2611,18 @@ dialog[open]:not([data-closing])::backdrop {
 }
 
 .st-group {
+  min-inline-size: 0;
+  width: 100%;
+  max-width: 100%;
   border: 0;
   border-top: 1px solid var(--soft);
   margin: 0 0 28px;
   padding: 20px 0 0;
+}
+
+.st-group code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .st-group legend {
@@ -4265,6 +4273,8 @@ select.m3-select:focus {
 }
 
 .mcp-cloud-guide {
+  min-width: 0;
+  max-width: 100%;
   margin-top: 10px;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -4272,6 +4282,7 @@ select.m3-select:focus {
   background: var(--surface-1);
   font-size: 13px;
   color: var(--mut);
+  overflow-wrap: anywhere;
 }
 
 .mcp-cloud-guide > summary {
@@ -4290,6 +4301,11 @@ select.m3-select:focus {
   display: grid;
   gap: 6px;
   line-height: 1.45;
+  min-width: 0;
+}
+
+.mcp-cloud-guide li {
+  min-width: 0;
 }
 
 .mcp-cloud-guide a {

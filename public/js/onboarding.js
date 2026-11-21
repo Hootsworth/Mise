@@ -477,7 +477,7 @@ export function renderOnboardingView(rootEl, ctx) {
           companionOn
             ? `
           <fieldset class="st-group">
-            <legend>Sign in &amp; permissions (Local Companion detected)</legend>
+            <legend>Sign in &amp; permissions (${mcpStatus?.mode === "vercel-stateless" ? "Vercel backend connected" : "Local companion detected"})</legend>
             <p class="st-help">Grant OAuth 2.1 access to view saved addresses, search live local inventory, and build carts (real orders always ask for confirmation first).</p>
             <div class="ob-oauth-row">
               <button type="button" class="tbtn ${swiggyConnected ? "is-active" : ""}" id="ob-oauth-swiggy" ${swiggyConnected || authBusy ? "disabled" : ""}>
@@ -490,7 +490,7 @@ export function renderOnboardingView(rootEl, ctx) {
             ${authNote ? `<p class="st-help" role="status" aria-live="polite">${esc(authNote)}</p>` : ""}
           </fieldset>
         `
-            : `<p class="st-help">Smart ordering links work right away on GitHub Pages. Running Mise locally (<code>npm start</code>) also unlocks live Swiggy, Zepto &amp; Blinkit MCP carts in Settings.</p>`
+            : `<p class="st-help">Smart ordering links work right away. Set <code>MISE_SESSION_SECRET</code> in Vercel (or run <code>npm start</code> locally) to unlock live Swiggy &amp; Zepto MCP carts and UPI checkout in Settings.</p>`
         }
 
         <div class="ob-foot">

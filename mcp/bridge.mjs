@@ -18,9 +18,20 @@ import {
 const ALLOWED_STATIC_HOSTS = new Set(["adityapdixit.me", "hootsworth.github.io"]);
 
 function getExtraAllowedOrigins() {
-  const raw = String(process.env.MISE_ALLOWED_ORIGINS || "").trim();
-  if (!raw) return new Set();
   const out = new Set();
+  for (const hostVar of [process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
+    const clean = String(hostVar || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    if (clean) {
+      try {
+        const u = new URL(`https://${clean}`);
+        if (u.origin !== "null") out.add(u.origin);
+      } catch {
+        // Ignore invalid Vercel env host
+      }
+    }
+  }
+  const raw = String(process.env.MISE_ALLOWED_ORIGINS || "").trim();
+  if (!raw) return out;
   for (const part of raw.split(",")) {
     const trimmed = part.trim().replace(/\/+$/, "");
     if (!trimmed) continue;
@@ -35,14 +46,20 @@ function getExtraAllowedOrigins() {
 }
 
 /**
- * Validates web origins for Local or Vercel MCP Companion requests without prefix/substring bugs.
+ * Validates web origins for Vercel or Local MCP Companion requests without prefix/substring bugs.
  */
-export function isAllowedCompanionOrigin(origin) {
+export function isAllowedCompanionOrigin(origin, selfOrigin = "") {
   if (!origin || typeof origin !== "string" || origin === "null") return false;
   try {
     const u = new URL(origin);
     if (u.origin === "null") return false;
     if (`${u.protocol}//${u.host}` !== origin) return false;
+    if (selfOrigin) {
+      const selfUrl = new URL(selfOrigin);
+      if ((selfUrl.protocol === "http:" || selfUrl.protocol === "https:") && selfUrl.origin === u.origin) {
+        return true;
+      }
+    }
     if (u.protocol === "http:") {
       return u.hostname === "localhost" || u.hostname === "127.0.0.1";
     }
@@ -135,7 +152,7 @@ function escapeHtml(s) {
   }[c]));
 }
 
-function renderOAuthPopupHtml({ providerId, ok, error, openerOrigin, sessionToken = "" }) {
+function renderOAuthPopupHtml({ providerId, ok, error, openerOrigin, sessionToken = "", selfOrigin = "" }) {
   const payload = {
     type: "mise:mcp-auth",
     provider: providerId,
@@ -143,7 +160,7 @@ function renderOAuthPopupHtml({ providerId, ok, error, openerOrigin, sessionToke
     error: error ? String(error) : "",
     ...(sessionToken ? { sessionToken } : {})
   };
-  const targetOrigin = isAllowedCompanionOrigin(openerOrigin) ? openerOrigin : "";
+  const targetOrigin = isAllowedCompanionOrigin(openerOrigin, selfOrigin) ? openerOrigin : "";
   const safePayloadJson = JSON.stringify(payload).replace(/</g, "\\u003c");
   const safeOriginJson = JSON.stringify(targetOrigin).replace(/</g, "\\u003c");
   const label = OAUTH_PROVIDERS[providerId]?.label || providerId;
@@ -629,8 +646,10 @@ export function createMcpBridge({
 
     if (!isApiRoute && !isOAuthCallback) return false;
 
+    const proto = url.protocol === "https:" ? "https:" : "http:";
+    const selfOrigin = `${proto}//${url.host || req.headers.host || "localhost:3456"}`;
     const reqOrigin = req.headers.origin || "";
-    const corsOrigin = reqOrigin && isAllowedCompanionOrigin(reqOrigin) ? reqOrigin : "";
+    const corsOrigin = reqOrigin && isAllowedCompanionOrigin(reqOrigin, selfOrigin) ? reqOrigin : "";
 
     if (isApiRoute && reqOrigin && !corsOrigin) {
       sendJson(res, 403, { error: "Origin not allowed by Mise MCP Companion." });
@@ -722,10 +741,9 @@ export function createMcpBridge({
       if (req.method === "POST" && oauthStartMatch) {
         const providerId = oauthStartMatch[1];
         const body = await readJsonBody(req);
-        const proto = url.protocol === "https:" ? "https:" : "http:";
-        const baseOrigin = `${proto}//${url.host || req.headers.host || "localhost:3456"}`;
+        const baseOrigin = selfOrigin;
         const candidateOpener = body.openerOrigin || reqOrigin || baseOrigin;
-        const openerOrigin = isAllowedCompanionOrigin(candidateOpener) ? candidateOpener : baseOrigin;
+        const openerOrigin = isAllowedCompanionOrigin(candidateOpener, selfOrigin) ? candidateOpener : baseOrigin;
         const started = await startOAuthFlow({
           providerId,
           baseOrigin,
@@ -760,7 +778,8 @@ export function createMcpBridge({
               providerId: result.providerId,
               ok: true,
               openerOrigin: result.openerOrigin,
-              sessionToken: store.isStateless ? store.getEncodedSessionToken() : ""
+              sessionToken: store.isStateless ? store.getEncodedSessionToken() : "",
+              selfOrigin
             })
           );
         } catch (err) {
@@ -771,7 +790,8 @@ export function createMcpBridge({
               providerId: err.providerId || providerHint || "swiggy",
               ok: false,
               error: err.message,
-              openerOrigin: err.openerOrigin || ""
+              openerOrigin: err.openerOrigin || "",
+              selfOrigin
             })
           );
         }

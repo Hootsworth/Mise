@@ -149,10 +149,10 @@ test("isSameOriginSafe validates origins strictly and rejects null or spoofed ho
   }
 });
 
-test("resolveCompanionOrigin returns empty string on static HTTPS pages unless configured", () => {
+test("resolveCompanionOrigin defaults to current HTTP/HTTPS origin unless overridden or opaque", () => {
   assert.equal(
-    resolveCompanionOrigin({ companionUrl: "" }, { hostname: "adityapdixit.me", origin: "https://adityapdixit.me" }),
-    ""
+    resolveCompanionOrigin({ companionUrl: "" }, { hostname: "mise.vercel.app", origin: "https://mise.vercel.app" }),
+    "https://mise.vercel.app"
   );
   assert.equal(
     resolveCompanionOrigin({ companionUrl: "" }, { hostname: "localhost", origin: "http://localhost:3456" }),
@@ -161,8 +161,11 @@ test("resolveCompanionOrigin returns empty string on static HTTPS pages unless c
   assert.equal(
     resolveCompanionOrigin(
       { companionUrl: "http://localhost:3456/" },
-      { hostname: "adityapdixit.me", origin: "https://adityapdixit.me" }
+      { hostname: "mise.vercel.app", origin: "https://mise.vercel.app" }
     ),
     "http://localhost:3456"
   );
+  assert.equal(resolveCompanionOrigin({ companionUrl: "" }, { origin: "null" }), "");
+  assert.equal(resolveCompanionOrigin({ companionUrl: "" }, { origin: "file://" }), "");
+  assert.equal(resolveCompanionOrigin({ companionUrl: "" }, undefined), "");
 });

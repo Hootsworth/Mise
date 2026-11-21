@@ -900,7 +900,7 @@ export class OrderSheetController {
             <button type="button" class="tbtn" id="ord-open-settings-btn">Sign in →</button>
           </div>`
         : `<div class="ord-banner">
-            <span>Smart search links work everywhere. Connect a Local Companion (<code>npm start</code>) or free Vercel backend in Settings to build carts and pay inside Mise.</span>
+            <span>Smart search links work everywhere. Configure <code>MISE_SESSION_SECRET</code> on Vercel (or run <code>npm start</code>) to build carts and pay inside Mise.</span>
             <button type="button" class="tbtn" id="ord-open-settings-btn">Delivery &amp; MCP →</button>
           </div>`
       : "";

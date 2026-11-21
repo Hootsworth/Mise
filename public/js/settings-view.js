@@ -535,6 +535,11 @@ export function renderSettingsView(rootEl, ctx) {
     const zomatoPerms = FOOD_PLATFORMS.find((p) => p.id === "zomato")?.permissions || [];
     const isCloudMode = mcpState?.mode === "vercel-stateless";
     const blinkitLocalOnly = isCloudMode || blinkit.mode === "local-only";
+    const liveOrigin =
+      mcpState?.origin ||
+      (typeof window !== "undefined" && window.location?.origin && window.location.origin !== "null"
+        ? window.location.origin
+        : "https://<your-vercel-domain>");
     const renderCardNotice = (pid) => {
       const n = cardNotice[pid];
       if (!n?.text) return "";
@@ -544,27 +549,28 @@ export function renderSettingsView(rootEl, ctx) {
     return `
       <div class="st-delivery">
         <fieldset class="st-group">
-          <legend>MCP Companion (Local or Free Vercel)</legend>
+          <legend>MCP Backend (Vercel or Local)</legend>
           <div class="mcp-companion-head">
             <span class="mcp-badge ${companionOn ? "is-on" : ""}">
               <span class="mcp-dot ${companionOn ? "is-on" : ""}" aria-hidden="true"></span>
               ${
                 companionOn
                   ? isCloudMode
-                    ? `Cloud backend connected (${esc(mcpState.origin || "Vercel")})`
-                    : `Local companion connected (${esc(mcpState.origin || "localhost")})`
-                  : "Static web mode (Deep-links active)"
+                    ? `Vercel backend connected (${esc(liveOrigin)})`
+                    : `Local companion connected (${esc(liveOrigin)})`
+                  : "Backend not configured (Deep-links active)"
               }
             </span>
           </div>
+          ${!companionOn && mcpState?.error ? `<p class="mcp-card-msg is-error" role="status">${esc(mcpState.error)}</p>` : ""}
           <div class="st-field">
-            <label for="st-mcp-url">Companion or Vercel Backend URL (optional when on localhost)</label>
+            <label for="st-mcp-url">Backend URL override (leave blank to use this Vercel site)</label>
             <div class="st-input-row">
               <input
                 type="url"
                 id="st-mcp-url"
                 value="${esc(deliveryDraft.companionUrl)}"
-                placeholder="https://mise-mcp.vercel.app or http://localhost:3456"
+                placeholder="Auto (same origin) or http://localhost:3456"
                 autocorrect="off"
                 autocapitalize="none"
                 spellcheck="false"
@@ -573,14 +579,17 @@ export function renderSettingsView(rootEl, ctx) {
             </div>
           </div>
           <p class="st-help">
-            Run <code>npm start</code> locally or deploy Mise’s zero-DB <code>api/</code> backend on Vercel Hobby ($0/mo) to unlock OAuth 2.1, carts, and in-Mise UPI/COD checkout for Swiggy &amp; Zepto. On static GitHub Pages without a backend, Mise opens smart search links directly.
+            Vercel hosts both Mise and its zero-DB <code>/api/mcp/*</code> backend on the same origin ($0/mo). Optionally enter <code>http://localhost:3456</code> above (while running <code>npm start</code>) to bridge local Blinkit.
           </p>
           <details class="mcp-cloud-guide">
-            <summary>How to deploy a free Vercel backend for GitHub Pages ($0/mo)</summary>
+            <summary>Vercel setup checklist (Environment Variable &amp; OAuth Callbacks)</summary>
             <ol>
-              <li>Deploy this repo on <a href="https://vercel.com/new" target="_blank" rel="noopener noreferrer">Vercel Hobby</a> (or run <code>npx vercel</code>) — it auto-detects <code>api/[...route].mjs</code> and <code>vercel.json</code> with zero database.</li>
-              <li>In Vercel Project Settings → Environment Variables, set <code>MISE_SESSION_SECRET</code> (run <code>openssl rand -hex 32</code>) and optional <code>MISE_ALLOWED_ORIGINS</code> (<code>https://adityapdixit.me</code>), then paste your Vercel URL above and click <strong>Check connection</strong>.</li>
-              <li>Submit your HTTPS callbacks (<code>&lt;your-vercel-url&gt;/api/mcp/oauth/callback/swiggy</code> and <code>&lt;your-vercel-url&gt;/callback</code>) to Swiggy Builders <code>/access</code> and the <code>zeptonow/mcp</code> allowlist before signing in from GitHub Pages.</li>
+              <li>In <strong>Vercel Project Settings → Environment Variables</strong>, set <code>MISE_SESSION_SECRET</code> (run <code>openssl rand -hex 32</code>) and redeploy — zero database required.</li>
+              <li>Submit these exact HTTPS callback URLs to <strong>Swiggy Builders</strong> (<code>/access</code>) and the <strong><code>zeptonow/mcp</code></strong> allowlist:
+                <br>Swiggy: <code>${esc(liveOrigin)}/api/mcp/oauth/callback/swiggy</code>
+                <br>Zepto: <code>${esc(liveOrigin)}/callback</code>
+              </li>
+              <li>Return here and click <strong>Sign in with Swiggy</strong> or <strong>Sign in with Zepto</strong> to unlock live carts, UPI QR checkout, and order tracking.</li>
             </ol>
           </details>
         </fieldset>
@@ -653,7 +662,7 @@ export function renderSettingsView(rootEl, ctx) {
                 blinkitLocalOnly
                   ? `
                 <p class="mcp-cloud-note">
-                  Blinkit’s unofficial Playwright MCP requires local Chromium/Python stdio execution. Run <code>npm start</code> locally to connect Blinkit, or use Swiggy Instamart &amp; Zepto on Vercel + GitHub Pages.
+                  Blinkit’s unofficial Playwright MCP requires local Chromium/Python stdio execution. Run <code>npm start</code> locally (and set Backend URL override to <code>http://localhost:3456</code>), or use Swiggy Instamart &amp; Zepto directly on Vercel.
                 </p>
                 <div class="mcp-app-foot">
                   <small class="mcp-meta">Unavailable on serverless cloud backends</small>
@@ -733,7 +742,7 @@ export function renderSettingsView(rootEl, ctx) {
                 ${zomatoPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
               </ul>
               <div class="mcp-app-foot">
-                <small class="mcp-meta">Works directly on GitHub Pages without OAuth</small>
+                <small class="mcp-meta">Works directly on Vercel without OAuth</small>
                 <a class="tbtn" href="https://mcpservers.org/servers/zomato-mcp" target="_blank" rel="noopener noreferrer">View docs ↗</a>
               </div>
             </article>
@@ -1113,7 +1122,7 @@ export function renderSettingsView(rootEl, ctx) {
       syncDeliveryInputs();
       ctx.onSaveDeliveryPrefs?.(deliveryDraft);
       mcpBusy = true;
-      setStatus("Checking Local MCP Companion…");
+      setStatus("Checking MCP backend…");
       render();
       try {
         const res = await ctx.onRefreshMcpStatus?.(deliveryDraft, { forceLocalProbe: true });

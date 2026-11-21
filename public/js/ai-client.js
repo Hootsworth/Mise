@@ -105,7 +105,7 @@ export const PROVIDERS = {
     imageModels: [],
     keyRequired: false,
     keyPlaceholder: "",
-    helpText: "Runs 100% locally with no API key. If calling from GitHub Pages, start Ollama with `OLLAMA_ORIGINS=\"*\"`."
+    helpText: "Runs 100% locally with no API key. If calling from a hosted Vercel domain, start Ollama with `OLLAMA_ORIGINS=\"*\"`."
   },
   custom: {
     id: "custom",

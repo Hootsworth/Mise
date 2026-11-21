@@ -65,8 +65,15 @@ export function resolveCompanionOrigin(prefs, loc = globalThis.location) {
       return "";
     }
   }
-  if (isLocalhostRuntime(loc)) {
-    return loc.origin;
+  if (loc?.origin && loc.origin !== "null") {
+    try {
+      const u = new URL(loc.origin);
+      if (u.origin !== "null" && (u.protocol === "http:" || u.protocol === "https:")) {
+        return u.origin;
+      }
+    } catch {
+      return "";
+    }
   }
   return "";
 }
@@ -155,7 +162,7 @@ export async function fetchCompanionStatus(prefs, { signal, forceLocalProbe = fa
 export async function startOAuthSignIn(providerId, prefs) {
   const origin = resolveCompanionOrigin(prefs);
   if (!origin) {
-    throw new Error("Start the Mise Local Companion (`npm start`) to sign in with OAuth.");
+    throw new Error("Connect a Vercel backend or run `npm start` locally to sign in with OAuth.");
   }
 
   // Open popup synchronously inside user activation so browsers never block it after DCR

@@ -359,7 +359,9 @@ test("isAllowedCompanionOrigin and isOrderPlacementTool enforce strict security 
   assert.equal(isAllowedCompanionOrigin("http://127.0.0.1:4000"), true);
   assert.equal(isAllowedCompanionOrigin("https://adityapdixit.me"), true);
   assert.equal(isAllowedCompanionOrigin("https://hootsworth.github.io"), true);
+  assert.equal(isAllowedCompanionOrigin("https://mise-preview.vercel.app", "https://mise-preview.vercel.app"), true);
 
+  assert.equal(isAllowedCompanionOrigin("https://mise-preview.vercel.app.evil.com", "https://mise-preview.vercel.app"), false);
   assert.equal(isAllowedCompanionOrigin("https://adityapdixit.me.evil.com"), false);
   assert.equal(isAllowedCompanionOrigin("https://evil.example"), false);
   assert.equal(isAllowedCompanionOrigin("http://adityapdixit.me"), false);
@@ -835,8 +837,8 @@ test("Stateless Vercel bridge preserves OAuth PKCE & auth across cold instances 
   const serverB = makeBridgeServer(bridgeB);
 
   const prevSecret = process.env.MISE_SESSION_SECRET;
-  process.env.MISE_SESSION_SECRET = sessionSecret;
-  const { default: vercelHandler } = await import("../api/[...route].mjs?stateless_test=1");
+  const { createVercelHandler } = await import("../api/index.mjs");
+  const vercelHandler = createVercelHandler({ providerOverrides });
   const vercelServer = http.createServer((req, res) => vercelHandler(req, res));
 
   await Promise.all([
@@ -901,14 +903,68 @@ test("Stateless Vercel bridge preserves OAuth PKCE & auth across cold instances 
     assert.equal(headerStatus.mode, "vercel-stateless");
     assert.equal(headerStatus.providers.swiggy.connected, true);
 
-    // 5. Verify api/[...route].mjs Vercel entrypoint /api/health
-    const healthRes = await fetch(`${baseV}/api/health`, {
-      headers: { Origin: "https://adityapdixit.me", "x-forwarded-proto": "https", "x-forwarded-host": "mise-api.vercel.app" }
+    // 5a. Missing MISE_SESSION_SECRET returns helpful 503 guidance on /api/index?__path=/api/mcp/status
+    delete process.env.MISE_SESSION_SECRET;
+    const unconfiguredRes = await fetch(`${baseV}/api/index?__path=/api/mcp/status`, {
+      headers: {
+        Origin: "https://mise-custom.vercel.app",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "mise-custom.vercel.app"
+      }
     });
+    assert.equal(unconfiguredRes.status, 503);
+    assert.equal(unconfiguredRes.headers.get("access-control-allow-origin"), "https://mise-custom.vercel.app");
+    const unconfiguredJson = await unconfiguredRes.json();
+    assert.equal(unconfiguredJson.configured, false);
+    assert.match(unconfiguredJson.error, /MISE_SESSION_SECRET/);
+
+    // 5b. With MISE_SESSION_SECRET set, Vercel same-origin /api/health, OAuth start & /callback __path rewrites work cleanly
+    process.env.MISE_SESSION_SECRET = sessionSecret;
+    const vercelHeaders = {
+      Origin: "https://mise-custom.vercel.app",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "mise-custom.vercel.app"
+    };
+
+    const healthRes = await fetch(`${baseV}/api/index?__path=/api/health`, { headers: vercelHeaders });
     assert.equal(healthRes.status, 200);
-    assert.equal(healthRes.headers.get("access-control-allow-origin"), "https://adityapdixit.me");
-    const health = await healthRes.json();
-    assert.deepEqual(health, { ok: true, mode: "vercel-stateless", configured: true });
+    assert.equal(healthRes.headers.get("access-control-allow-origin"), "https://mise-custom.vercel.app");
+    assert.deepEqual(await healthRes.json(), { ok: true, mode: "vercel-stateless", configured: true });
+
+    const vSwiggyStartRes = await fetch(`${baseV}/api/index?__path=/api/mcp/oauth/start/swiggy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...vercelHeaders },
+      body: JSON.stringify({ openerOrigin: "https://mise-custom.vercel.app" })
+    });
+    assert.equal(vSwiggyStartRes.status, 200);
+    const vSwiggyStart = await vSwiggyStartRes.json();
+    assert.equal(vSwiggyStart.redirectUri, "https://mise-custom.vercel.app/api/mcp/oauth/callback/swiggy");
+    assert.ok(vSwiggyStart.state.startsWith("st1."));
+
+    const vZeptoStartRes = await fetch(`${baseV}/api/index?__path=/api/mcp/oauth/start/zepto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...vercelHeaders },
+      body: JSON.stringify({ openerOrigin: "https://mise-custom.vercel.app" })
+    });
+    assert.equal(vZeptoStartRes.status, 200);
+    const vZeptoStart = await vZeptoStartRes.json();
+    assert.equal(vZeptoStart.redirectUri, "https://mise-custom.vercel.app/callback");
+
+    const vZeptoGrant = remote.issueAuthCode(vZeptoStart.authUrl);
+    const vZeptoCb = await fetch(
+      `${baseV}/api/index?__path=/callback&code=${encodeURIComponent(vZeptoGrant.code)}&state=${encodeURIComponent(vZeptoGrant.state)}`,
+      {
+        headers: {
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "mise-custom.vercel.app"
+        }
+      }
+    );
+    assert.equal(vZeptoCb.status, 200);
+    const vZeptoHtml = await vZeptoCb.text();
+    assert.match(vZeptoHtml, /postMessage\(payload, targetOrigin\)/);
+    assert.match(vZeptoHtml, /"https:\/\/mise-custom\.vercel\.app"/);
+    assert.match(vZeptoHtml, /"sessionToken":"/);
   } finally {
     if (prevSecret === undefined) delete process.env.MISE_SESSION_SECRET;
     else process.env.MISE_SESSION_SECRET = prevSecret;
