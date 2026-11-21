@@ -1,14 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { PUBLIC_PROVIDERS, getPublicProviderCatalog } from "./catalog.mjs";
 
-export const PUBLIC_PROVIDERS = [
-  { id: "gemini", label: "Google Gemini", envVar: "GEMINI_API_KEY", supportsImages: true },
-  { id: "meta", label: "Meta AI", envVar: "META_API_KEY", altEnvVar: "MODEL_API_KEY", supportsImages: true },
-  { id: "openai", label: "OpenAI", envVar: "OPENAI_API_KEY", supportsImages: true },
-  { id: "claude", label: "Anthropic Claude", envVar: "ANTHROPIC_API_KEY", supportsImages: false },
-  { id: "openrouter", label: "OpenRouter", envVar: "OPENROUTER_API_KEY", supportsImages: true },
-  { id: "ollama", label: "Local Ollama", envVar: "OLLAMA_HOST", supportsImages: false }
-];
+export { PUBLIC_PROVIDERS, getPublicProviderCatalog };
 
 /**
  * Loads environment variables from a `.env` file without overwriting existing
@@ -42,37 +36,4 @@ export function loadEnv(envPath = path.resolve(process.cwd(), ".env")) {
     }
   }
   return loaded;
-}
-
-/**
- * Returns the public provider availability catalog for clients.
- * Never exposes API keys, model identifiers, or private hosts.
- */
-export function getPublicProviderCatalog(env = process.env) {
-  const providers = PUBLIC_PROVIDERS.map((p) => {
-    const configured =
-      p.id === "ollama"
-        ? Boolean(env.OLLAMA_HOST?.trim() || env.OLLAMA_MODEL?.trim())
-        : Boolean(env[p.envVar]?.trim() || (p.altEnvVar && env[p.altEnvVar]?.trim()));
-    return {
-      id: p.id,
-      label: p.label,
-      configured,
-      supportsImages: p.supportsImages
-    };
-  });
-
-  const explicit = String(env.DEFAULT_PROVIDER || "").toLowerCase().trim();
-  const explicitMatch = providers.find((p) => p.id === explicit && p.configured);
-  const firstConfigured = providers.find((p) => p.configured);
-  const defaultProvider = explicitMatch?.id || firstConfigured?.id || "gemini";
-
-  const imgMode = String(env.IMAGE_PROVIDER || "auto").toLowerCase().trim();
-  const imageGenerationAvailable = imgMode !== "off";
-
-  return {
-    defaultProvider,
-    imageGenerationAvailable,
-    providers
-  };
 }

@@ -1,4 +1,12 @@
+import { fetchOpenDishPhoto } from "./open-images.js";
+
 const PROVIDER_STORAGE_KEY = "mise:provider";
+const AI_IMAGES_STORAGE_KEY = "mise:ai_images";
+
+export function apiUrl(path) {
+  const base = String(window.__MISE_CONFIG__?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  return `${base}${path}`;
+}
 
 export function loadSelectedProvider() {
   try {
@@ -17,19 +25,50 @@ export function saveSelectedProvider(provider) {
   }
 }
 
+export function loadAiImagesOptIn() {
+  try {
+    return localStorage.getItem(AI_IMAGES_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveAiImagesOptIn(enabled) {
+  try {
+    if (enabled) localStorage.setItem(AI_IMAGES_STORAGE_KEY, "true");
+    else localStorage.removeItem(AI_IMAGES_STORAGE_KEY);
+  } catch {
+    // Storage unavailable
+  }
+}
+
 export function getActiveProvider() {
   return loadSelectedProvider() || "";
 }
 
 export async function getHealth() {
-  const res = await fetch("/api/health");
-  if (!res.ok) throw new Error("Failed to inspect server provider availability.");
-  return res.json();
+  try {
+    const res = await fetch(apiUrl("/api/health"));
+    const ct = res.headers.get("content-type") || "";
+    if (!res.ok || !ct.includes("application/json")) {
+      throw new Error("Static-only mode");
+    }
+    return await res.json();
+  } catch {
+    return {
+      ok: false,
+      staticOnly: true,
+      defaultProvider: "gemini",
+      imageGenerationAvailable: true,
+      aiImageGenerationAvailable: false,
+      providers: []
+    };
+  }
 }
 
 export async function postJson(path, payload, signal) {
   const provider = payload.provider || getActiveProvider();
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, ...(provider ? { provider } : {}) }),
@@ -46,22 +85,43 @@ export async function fetchDishIdeas(payload, signal) {
   return postJson("/api/ideas", payload, signal);
 }
 
+/**
+ * Fetches a dish image via the server/Worker `/api/dish-image` endpoint (default open-image waterfall;
+ * opt-in AI when `payload.useAi` is true). Falls back directly to client-side open image APIs when static-only.
+ */
 export async function fetchDishImage(payload, signal) {
+  const body = {
+    ...payload,
+    useAi: Boolean(payload.useAi),
+    excludeUrls: Array.isArray(payload.excludeUrls) ? payload.excludeUrls : [],
+    ...(getActiveProvider() ? { provider: getActiveProvider() } : {})
+  };
+
   try {
-    const res = await fetch("/api/dish-image", {
+    const res = await fetch(apiUrl("/api/dish-image"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...payload,
-        ...(getActiveProvider() ? { provider: getActiveProvider() } : {})
-      }),
+      body: JSON.stringify(body),
       signal
     });
-    if (!res.ok) return { imageUrl: null, source: "none" };
-    return await res.json();
+    const ct = res.headers.get("content-type") || "";
+    if (res.ok && ct.includes("application/json")) {
+      return await res.json();
+    }
   } catch {
-    return { imageUrl: null, source: "none" };
+    // Fall through to client-side open photo lookup when backend is unavailable
   }
+
+  if (!body.useAi) {
+    return await fetchOpenDishPhoto({
+      title: payload.title,
+      cuisine: payload.cuisine,
+      excludeUrls: body.excludeUrls,
+      signal
+    });
+  }
+
+  return { imageUrl: null, source: "none", credit: "", creditUrl: "" };
 }
 
 /**
@@ -70,7 +130,7 @@ export async function fetchDishImage(payload, signal) {
  */
 export async function streamRecipeEndpoint(path, payload, { onDelta, onDone, onError, signal } = {}) {
   const provider = payload.provider || getActiveProvider();
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, ...(provider ? { provider } : {}) }),

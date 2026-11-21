@@ -9,7 +9,8 @@ export const SAMPLE_RECIPES = [
     difficulty: "Easy",
     servings: 2,
     cuisine: "Japanese-Italian",
-    imageUrl: "/images/miso-rigatoni.jpg",
+    imageUrl: "./images/miso-rigatoni.jpg",
+    imageCredit: "Mise Studio",
     visual_prompt: "Glossy rigatoni tossed with seared wild mushrooms, browned butter sheen, cracked black pepper, and chives in a matte ceramic bowl.",
     ingredients: [
       { item: "rigatoni", amount: 220, unit: "g", note: "bronze-die preferred" },
@@ -91,7 +92,8 @@ export const SAMPLE_RECIPES = [
     difficulty: "Easy",
     servings: 6,
     cuisine: "Modern Pastry",
-    imageUrl: "/images/sesame-skillet.jpg",
+    imageUrl: "./images/sesame-skillet.jpg",
+    imageCredit: "Mise Studio",
     visual_prompt: "Crisp-edged black sesame skillet cookie in cast iron dotted with melted dark chocolate pools and flaky sea salt.",
     ingredients: [
       { item: "unsalted butter", amount: 115, unit: "g", note: "softened or browned & cooled" },
@@ -174,7 +176,8 @@ export const SAMPLE_RECIPES = [
     difficulty: "Easy",
     servings: 2,
     cuisine: "Mediterranean",
-    imageUrl: "/images/charred-cabbage.jpg",
+    imageUrl: "./images/charred-cabbage.jpg",
+    imageCredit: "Mise Studio",
     visual_prompt: "Blistered charred cabbage wedges with crispy chickpeas, herbs, and creamy tahini drizzle on stoneware.",
     ingredients: [
       { item: "green cabbage", amount: 500, unit: "g", note: "cut through the core into 4 wedges" },
@@ -224,7 +227,8 @@ export const SAMPLE_RECIPES = [
     difficulty: "Easy",
     servings: 2,
     cuisine: "Pan-Asian",
-    imageUrl: "/images/crispy-rice-bowl.jpg",
+    imageUrl: "./images/crispy-rice-bowl.jpg",
+    imageCredit: "Mise Studio",
     visual_prompt: "Pan-crisped rice bowl topped with glazed tofu, seared mushrooms, a jammy halved egg, sesame seeds, and scallions.",
     ingredients: [
       { item: "day-old cooked rice", amount: 340, unit: "g", note: "broken up" },
@@ -280,7 +284,8 @@ export const SAMPLE_IDEAS = {
       uses: ["mushrooms", "white miso", "butter"],
       extras_needed: ["rigatoni", "Parmigiano"],
       pantry_only: false,
-      imageUrl: "/images/miso-rigatoni.jpg",
+      imageUrl: "./images/miso-rigatoni.jpg",
+      imageCredit: "Mise Studio",
       visual_prompt: "Glossy rigatoni tossed with seared wild mushrooms and chives in a matte ceramic bowl.",
       sampleRecipeId: "sample-miso-rigatoni"
     },
@@ -295,7 +300,8 @@ export const SAMPLE_IDEAS = {
       uses: ["rice", "mushrooms", "eggs"],
       extras_needed: ["firm tofu", "soy sauce"],
       pantry_only: false,
-      imageUrl: "/images/crispy-rice-bowl.jpg",
+      imageUrl: "./images/crispy-rice-bowl.jpg",
+      imageCredit: "Mise Studio",
       visual_prompt: "Pan-crisped rice bowl topped with glazed tofu, mushrooms, jammy egg, and scallions.",
       sampleRecipeId: "sample-crispy-rice-bowl"
     },
@@ -310,7 +316,8 @@ export const SAMPLE_IDEAS = {
       uses: ["cabbage", "chickpeas", "tahini"],
       extras_needed: [],
       pantry_only: true,
-      imageUrl: "/images/charred-cabbage.jpg",
+      imageUrl: "./images/charred-cabbage.jpg",
+      imageCredit: "Mise Studio",
       visual_prompt: "Blistered charred cabbage wedges with crispy chickpeas and creamy tahini drizzle on stoneware.",
       sampleRecipeId: "sample-charred-cabbage"
     },
@@ -325,7 +332,8 @@ export const SAMPLE_IDEAS = {
       uses: ["butter", "chocolate", "egg"],
       extras_needed: ["black sesame paste"],
       pantry_only: false,
-      imageUrl: "/images/sesame-skillet.jpg",
+      imageUrl: "./images/sesame-skillet.jpg",
+      imageCredit: "Mise Studio",
       visual_prompt: "Crisp-edged black sesame skillet cookie in cast iron with melted chocolate and flaky salt.",
       sampleRecipeId: "sample-sesame-skillet"
     }

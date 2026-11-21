@@ -130,14 +130,24 @@ test("buildProviderRequest constructs valid multimodal requests for all 5 provid
 });
 
 test("resolveImageProvider, buildImageRequest, and parseImageResponse handle Gemini, OpenAI, and OpenRouter", () => {
-  const autoGem = resolveImageProvider("claude", { GEMINI_API_KEY: "gk", ANTHROPIC_API_KEY: "ck" });
+  const defaultOpen = resolveImageProvider("claude", { GEMINI_API_KEY: "gk", ANTHROPIC_API_KEY: "ck" });
+  assert.notEqual(defaultOpen.provider, "gemini");
+
+  const autoGem = resolveImageProvider(
+    "claude",
+    { GEMINI_API_KEY: "gk", ANTHROPIC_API_KEY: "ck" },
+    { useAi: true }
+  );
   assert.equal(autoGem.provider, "gemini");
   assert.equal(autoGem.model, "gemini-2.5-flash-image");
 
-  const autoWiki = resolveImageProvider("claude", { ANTHROPIC_API_KEY: "ck" });
-  assert.equal(autoWiki.provider, "wikimedia");
+  const autoOpen = resolveImageProvider("claude", { ANTHROPIC_API_KEY: "ck" }, { useAi: true });
+  assert.equal(autoOpen.provider, "open");
 
-  assert.equal(resolveImageProvider("gemini", { IMAGE_PROVIDER: "off", GEMINI_API_KEY: "gk" }), null);
+  assert.equal(
+    resolveImageProvider("gemini", { IMAGE_PROVIDER: "off", GEMINI_API_KEY: "gk" }, { useAi: true }),
+    null
+  );
 
   const gemImgReq = buildImageRequest({
     provider: "gemini",
@@ -262,7 +272,10 @@ test("Meta Model API supports META_API_KEY / MODEL_API_KEY, developer role, visi
   );
   assert.equal(parseProviderChunk("meta", "data: [DONE]").done, true);
 
-  const imgTarget = resolveImageProvider("meta", { MODEL_API_KEY: "LLM_meta_secret" });
+  const imgDefault = resolveImageProvider("meta", { MODEL_API_KEY: "LLM_meta_secret" });
+  assert.equal(imgDefault.provider, "open");
+
+  const imgTarget = resolveImageProvider("meta", { MODEL_API_KEY: "LLM_meta_secret" }, { useAi: true });
   assert.equal(imgTarget.provider, "meta");
   assert.equal(imgTarget.model, "muse-image-1.0");
 

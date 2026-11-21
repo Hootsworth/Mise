@@ -83,9 +83,19 @@ test("GET /api/health returns public provider catalog without secrets and blocks
   }
 });
 
-test("POST /api/ideas returns curated options grid and POST /api/dish-image caches results", async () => {
+test("POST /api/ideas returns curated options grid and POST /api/dish-image uses open-first default and caches open vs AI separately", async () => {
   let imageCalls = 0;
+  let openCalls = 0;
   const mockFetch = async (url) => {
+    if (String(url).startsWith("https://api.openverse.org/")) {
+      openCalls++;
+      return new Response(
+        JSON.stringify({
+          results: [{ thumbnail: "https://cdn.openverse.org/eggplant.jpg", width: 900, creator: "Open Chef" }]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
     if (String(url).includes("/images/generations")) {
       imageCalls++;
       return new Response(JSON.stringify({ data: [{ b64_json: "QUJD" }] }), {
@@ -140,7 +150,7 @@ test("POST /api/ideas returns curated options grid and POST /api/dish-image cach
     assert.equal(ideas.options.length, 1);
     assert.equal(ideas.options[0].title, "Smoky Miso Eggplant");
 
-    const img1 = await fetch(`${srv.baseUrl}/api/dish-image`, {
+    const openImgRes = await fetch(`${srv.baseUrl}/api/dish-image`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -149,9 +159,26 @@ test("POST /api/ideas returns curated options grid and POST /api/dish-image cach
         visualPrompt: "Blistered eggplant on stone."
       })
     });
+    const dOpen = await openImgRes.json();
+    assert.equal(dOpen.source, "openverse");
+    assert.equal(dOpen.imageUrl, "https://cdn.openverse.org/eggplant.jpg");
+    assert.equal(openCalls, 1);
+    assert.equal(imageCalls, 0);
+
+    const img1 = await fetch(`${srv.baseUrl}/api/dish-image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "openai",
+        title: "Smoky Miso Eggplant",
+        visualPrompt: "Blistered eggplant on stone.",
+        useAi: true
+      })
+    });
     const d1 = await img1.json();
     assert.equal(d1.imageUrl, "data:image/png;base64,QUJD");
     assert.equal(d1.source, "openai");
+    assert.equal(imageCalls, 1);
 
     const img2 = await fetch(`${srv.baseUrl}/api/dish-image`, {
       method: "POST",
@@ -159,12 +186,28 @@ test("POST /api/ideas returns curated options grid and POST /api/dish-image cach
       body: JSON.stringify({
         provider: "openai",
         title: "Smoky Miso Eggplant",
-        visualPrompt: "Blistered eggplant on stone."
+        visualPrompt: "Blistered eggplant on stone.",
+        useAi: true
       })
     });
     const d2 = await img2.json();
     assert.equal(d2.cached, true);
+    assert.equal(d2.source, "openai");
     assert.equal(imageCalls, 1);
+
+    const openCachedRes = await fetch(`${srv.baseUrl}/api/dish-image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "openai",
+        title: "Smoky Miso Eggplant",
+        visualPrompt: "Blistered eggplant on stone."
+      })
+    });
+    const dOpenCached = await openCachedRes.json();
+    assert.equal(dOpenCached.cached, true);
+    assert.equal(dOpenCached.source, "openverse");
+    assert.equal(openCalls, 1);
   } finally {
     await srv.close();
   }
@@ -397,7 +440,7 @@ test("Meta AI provider routes /api/health, /api/generate, and /api/dish-image vi
     const imgRes = await fetch(`${srv.baseUrl}/api/dish-image`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: "meta", title: "Smoky Miso Eggplant" })
+      body: JSON.stringify({ provider: "meta", title: "Smoky Miso Eggplant", useAi: true })
     });
     const imgJson = await imgRes.json();
     assert.equal(imgJson.source, "meta");

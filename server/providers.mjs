@@ -1,5 +1,6 @@
-import { getPublicProviderCatalog } from "./env.mjs";
+import { getPublicProviderCatalog } from "./catalog.mjs";
 import { buildDishImagePrompt } from "./prompts.mjs";
+import { fetchOpenDishPhoto, fetchWikipediaPhoto } from "../public/js/open-images.js";
 
 export const PROVIDER_DEFAULTS = {
   gemini: {
@@ -139,13 +140,14 @@ export function resolveCredentials({ provider } = {}, env = process.env) {
 
 /**
  * Resolves which image provider should generate/fetch dish imagery.
+ * Open image endpoints are used by default; AI image generation requires explicit opt-in (`useAi: true`).
  */
-export function resolveImageProvider(preferredProvider, env = process.env) {
+export function resolveImageProvider(preferredProvider, env = process.env, { useAi = false } = {}) {
   const mode = String(env.IMAGE_PROVIDER || "auto").toLowerCase().trim();
   if (mode === "off") return null;
 
-  if (mode === "wikimedia") {
-    return { provider: "wikimedia", apiKey: "", model: "", baseUrl: "" };
+  if (!useAi || mode === "open" || mode === "wikimedia") {
+    return { provider: "open", apiKey: "", model: "", baseUrl: "" };
   }
 
   const checkAiProvider = (id) => {
@@ -163,10 +165,9 @@ export function resolveImageProvider(preferredProvider, env = process.env) {
   };
 
   if (mode === "gemini" || mode === "meta" || mode === "openai" || mode === "openrouter") {
-    return checkAiProvider(mode);
+    return checkAiProvider(mode) || { provider: "open", apiKey: "", model: "", baseUrl: "" };
   }
 
-  // auto mode: prefer active text provider if it supports images, then fall back across configured providers
   const pref = String(preferredProvider || "").toLowerCase().trim();
   const order = [];
   if (pref && ["gemini", "meta", "openai", "openrouter"].includes(pref)) order.push(pref);
@@ -178,7 +179,7 @@ export function resolveImageProvider(preferredProvider, env = process.env) {
     if (resolved) return resolved;
   }
 
-  return { provider: "wikimedia", apiKey: "", model: "", baseUrl: "" };
+  return { provider: "open", apiKey: "", model: "", baseUrl: "" };
 }
 
 /**
@@ -512,43 +513,15 @@ export function parseImageResponse(provider, data) {
 }
 
 /**
- * Fetches a safe Wikimedia/Wikipedia dish thumbnail URL as a zero-key visual fallback.
+ * Legacy helper retained for compatibility; delegates to Wikipedia/Wikimedia lookup.
  */
 export async function fetchWikimediaDishPhoto(title, fetchImpl = fetch, signal) {
-  const cleanTitle = String(title || "").trim();
-  if (!cleanTitle) return null;
-
-  const queries = [cleanTitle, `${cleanTitle} dish food`];
-  for (const q of queries) {
-    const url =
-      "https://en.wikipedia.org/w/api.php?action=query&generator=search" +
-      `&gsrsearch=${encodeURIComponent(q)}&gsrlimit=4&prop=pageimages&piprop=thumbnail&pithumbsize=960&format=json`;
-    try {
-      const res = await fetchImpl(url, {
-        method: "GET",
-        headers: { "User-Agent": "MiseRecipeApp/1.0" },
-        signal
-      });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const pages = Object.values(json?.query?.pages || {}).sort(
-        (a, b) => (a.index ?? 99) - (b.index ?? 99)
-      );
-      for (const page of pages) {
-        const src = page?.thumbnail?.source;
-        if (typeof src === "string" && /^https:\/\/upload\.wikimedia\.org\//i.test(src)) {
-          return src;
-        }
-      }
-    } catch {
-      // Fall through cleanly
-    }
-  }
-  return null;
+  const res = await fetchWikipediaPhoto(title, new Set(), fetchImpl, signal);
+  return res?.imageUrl || null;
 }
 
 /**
- * Generates or finds an editorial photograph for a dish, falling back gracefully.
+ * Fetches an open-endpoint dish photograph by default, or generates with AI when `useAi` is opted in.
  */
 export async function generateDishImage({
   title,
@@ -556,16 +529,18 @@ export async function generateDishImage({
   cuisine = "",
   visualPrompt = "",
   provider,
+  useAi = false,
+  excludeUrls = [],
   env = process.env,
   fetchImpl = fetch,
   signal
 }) {
-  const target = resolveImageProvider(provider, env);
+  const target = resolveImageProvider(provider, env, { useAi });
   if (!target) {
-    return { imageUrl: null, source: "none" };
+    return { imageUrl: null, source: "none", credit: "", creditUrl: "" };
   }
 
-  if (target.provider !== "wikimedia") {
+  if (useAi && target.provider !== "open") {
     try {
       const prompt = buildDishImagePrompt({ title, tagline, cuisine, visualPrompt });
       const desc = buildImageRequest({
@@ -585,22 +560,28 @@ export async function generateDishImage({
         const json = await res.json();
         const imageUrl = parseImageResponse(target.provider, json);
         if (imageUrl) {
-          return { imageUrl, source: target.provider };
+          return {
+            imageUrl,
+            source: target.provider,
+            credit: `AI · ${PROVIDER_DEFAULTS[target.provider]?.label || target.provider}`,
+            creditUrl: "",
+            isAi: true
+          };
         }
       }
     } catch {
-      // Fall through cleanly to Wikimedia fallback unless explicit AI provider was forced
+      // Fall through cleanly to open photo waterfall
     }
   }
 
   if (String(env.IMAGE_PROVIDER || "auto").toLowerCase().trim() !== "off") {
-    const wikiUrl = await fetchWikimediaDishPhoto(title, fetchImpl, signal);
-    if (wikiUrl) {
-      return { imageUrl: wikiUrl, source: "wikimedia" };
+    const open = await fetchOpenDishPhoto({ title, cuisine, excludeUrls, fetchImpl, signal });
+    if (open?.imageUrl) {
+      return { ...open, isAi: false };
     }
   }
 
-  return { imageUrl: null, source: "none" };
+  return { imageUrl: null, source: "none", credit: "", creditUrl: "" };
 }
 
 /**

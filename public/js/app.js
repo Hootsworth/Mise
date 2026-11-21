@@ -16,6 +16,8 @@ import {
 import {
   loadSelectedProvider,
   saveSelectedProvider,
+  loadAiImagesOptIn,
+  saveAiImagesOptIn,
   getHealth,
   postJson,
   streamRecipeEndpoint,
@@ -161,7 +163,9 @@ const state = {
   streamController: null,
   heroColor: false,
   heroImageLoading: false,
-  sessionImageMap: new Map(), // title.toLowerCase() -> imageUrl (keeps large data URLs out of localStorage)
+  aiImagesOptIn: loadAiImagesOptIn(),
+  seenHeroUrls: new Map(), // title.toLowerCase() -> string[] for cycling open photos
+  sessionImageMap: new Map(), // title.toLowerCase() -> { imageUrl, credit, creditUrl, isAi }
   hist: loadJson("mise:hist", []),
   saved: loadJson("mise:saved", []),
   profile: { ...DEFAULT_PROFILE, ...(loadJson("mise:profile", {}) || {}) },
@@ -190,7 +194,19 @@ function resolveRecipeImage(recipe) {
   if (!recipe) return "";
   if (recipe.imageUrl) return recipe.imageUrl;
   const cached = state.sessionImageMap.get(String(recipe.title || "").toLowerCase());
-  return cached || "";
+  return typeof cached === "string" ? cached : cached?.imageUrl || "";
+}
+
+function resolveRecipeImageMeta(recipe) {
+  if (!recipe) return { imageUrl: "", credit: "", creditUrl: "", isAi: false };
+  const cached = state.sessionImageMap.get(String(recipe.title || "").toLowerCase());
+  const meta = cached && typeof cached === "object" ? cached : {};
+  return {
+    imageUrl: recipe.imageUrl || meta.imageUrl || "",
+    credit: recipe.imageCredit || meta.credit || "",
+    creditUrl: recipe.imageCreditUrl || meta.creditUrl || "",
+    isAi: Boolean(recipe.imageIsAi ?? meta.isAi)
+  };
 }
 
 function showView(which) {
@@ -371,11 +387,18 @@ function serializeRecipeForStorage(recipe) {
 }
 
 function pushHistory(recipe) {
-  const imgUrl = resolveRecipeImage(recipe);
+  const meta = resolveRecipeImageMeta(recipe);
+  const imgUrl = meta.imageUrl;
   if (imgUrl) {
-    state.sessionImageMap.set(recipe.title.toLowerCase(), imgUrl);
+    state.sessionImageMap.set(recipe.title.toLowerCase(), meta);
   }
-  const storedRecipe = serializeRecipeForStorage({ ...recipe, imageUrl: imgUrl });
+  const storedRecipe = serializeRecipeForStorage({
+    ...recipe,
+    imageUrl: imgUrl,
+    imageCredit: meta.credit,
+    imageCreditUrl: meta.creditUrl,
+    imageIsAi: meta.isAi
+  });
   const entry = {
     title: recipe.title,
     tagline: recipe.tagline || "",
@@ -403,8 +426,14 @@ function toggleSaveCurrent() {
   if (idx !== -1) {
     state.saved.splice(idx, 1);
   } else {
-    const imgUrl = resolveRecipeImage(r);
-    const storedRecipe = serializeRecipeForStorage({ ...r, imageUrl: imgUrl });
+    const meta = resolveRecipeImageMeta(r);
+    const storedRecipe = serializeRecipeForStorage({
+      ...r,
+      imageUrl: meta.imageUrl,
+      imageCredit: meta.credit,
+      imageCreditUrl: meta.creditUrl,
+      imageIsAi: meta.isAi
+    });
     state.saved.unshift({
       title: r.title,
       tagline: r.tagline || "",
@@ -449,7 +478,8 @@ function renderLibrary() {
 
   listEl.innerHTML = items
     .map((item, idx) => {
-      const thumb = item.imageUrl || state.sessionImageMap.get(String(item.title || "").toLowerCase()) || "";
+      const cached = state.sessionImageMap.get(String(item.title || "").toLowerCase());
+      const thumb = item.imageUrl || (typeof cached === "string" ? cached : cached?.imageUrl) || "";
       return `
       <div class="lib-row">
         <button type="button" class="lib-open" data-lib-open="${idx}">
@@ -468,10 +498,13 @@ function renderLibrary() {
 
 function openRecipeInView(recipe, { pushToHistory = false } = {}) {
   const cloned = structuredClone(recipe);
-  const existingImg = resolveRecipeImage(cloned);
-  if (existingImg) {
-    cloned.imageUrl = existingImg;
-    state.sessionImageMap.set(cloned.title.toLowerCase(), existingImg);
+  const existingMeta = resolveRecipeImageMeta(cloned);
+  if (existingMeta.imageUrl) {
+    cloned.imageUrl = existingMeta.imageUrl;
+    cloned.imageCredit = existingMeta.credit;
+    cloned.imageCreditUrl = existingMeta.creditUrl;
+    cloned.imageIsAi = existingMeta.isAi;
+    state.sessionImageMap.set(cloned.title.toLowerCase(), existingMeta);
   }
 
   state.versions = [cloned];
@@ -645,7 +678,8 @@ async function hydrateIdeasImages(options) {
           title: opt.title,
           tagline: opt.tagline,
           cuisine: opt.cuisine,
-          visualPrompt: opt.visual_prompt
+          visualPrompt: opt.visual_prompt,
+          useAi: state.aiImagesOptIn
         },
         signal
       );
@@ -653,7 +687,15 @@ async function hydrateIdeasImages(options) {
       opt.imageLoading = false;
       if (res?.imageUrl) {
         opt.imageUrl = res.imageUrl;
-        state.sessionImageMap.set(opt.title.toLowerCase(), res.imageUrl);
+        opt.imageCredit = res.credit || "";
+        opt.imageCreditUrl = res.creditUrl || "";
+        opt.imageIsAi = Boolean(res.isAi);
+        state.sessionImageMap.set(opt.title.toLowerCase(), {
+          imageUrl: res.imageUrl,
+          credit: opt.imageCredit,
+          creditUrl: opt.imageCreditUrl,
+          isAi: opt.imageIsAi
+        });
       }
       if (state.view === "ideas" && !state.ideasLoading) {
         renderIdeasView();
@@ -744,15 +786,30 @@ function cookSelectedOption(option) {
       profile: state.profile
     },
     "Writing",
-    option.imageUrl || ""
+    option.imageUrl
+      ? {
+          imageUrl: option.imageUrl,
+          credit: option.imageCredit || "",
+          creditUrl: option.imageCreditUrl || "",
+          isAi: Boolean(option.imageIsAi)
+        }
+      : null
   );
 }
 
 /* ---------------- Recipe Hero Image ---------------- */
 
-async function hydrateRecipeHeroImage(recipe, { forceRefresh = false } = {}) {
+async function hydrateRecipeHeroImage(recipe, { forceRefresh = false, useAi = state.aiImagesOptIn } = {}) {
   if (!recipe || !recipe.title) return;
   if (state.health && !state.health.imageGenerationAvailable) return;
+
+  const key = recipe.title.toLowerCase();
+  const seenList = state.seenHeroUrls.get(key) || [];
+  const currentUrl = resolveRecipeImage(recipe);
+  if (currentUrl && !seenList.includes(currentUrl)) {
+    seenList.push(currentUrl);
+  }
+  const excludeUrls = forceRefresh ? [...seenList] : [];
 
   state.heroImageLoading = true;
   if (state.view === "recipe") renderRecipe();
@@ -762,15 +819,30 @@ async function hydrateRecipeHeroImage(recipe, { forceRefresh = false } = {}) {
     tagline: recipe.tagline,
     cuisine: recipe.cuisine,
     visualPrompt: recipe.visual_prompt,
+    useAi,
+    excludeUrls,
     forceRefresh
   });
 
   state.heroImageLoading = false;
   const current = activeRecipe();
   if (current && current.title === recipe.title && res?.imageUrl) {
+    if (!seenList.includes(res.imageUrl)) seenList.push(res.imageUrl);
+    state.seenHeroUrls.set(key, seenList);
     current.imageUrl = res.imageUrl;
-    state.sessionImageMap.set(current.title.toLowerCase(), res.imageUrl);
+    current.imageCredit = res.credit || "";
+    current.imageCreditUrl = res.creditUrl || "";
+    current.imageIsAi = Boolean(res.isAi);
+    state.sessionImageMap.set(key, {
+      imageUrl: res.imageUrl,
+      credit: current.imageCredit,
+      creditUrl: current.imageCreditUrl,
+      isAi: current.imageIsAi
+    });
     pushHistory(current);
+  } else if (forceRefresh && !res?.imageUrl && seenList.length > 1) {
+    // Wrap back around previously found open photos if no more new matches exist
+    state.seenHeroUrls.set(key, currentUrl ? [currentUrl] : []);
   }
   if (state.view === "recipe") renderRecipe();
 }
@@ -786,11 +858,21 @@ function renderRecipe() {
   const diff = prev ? diffRecipes(prev, r) : { changedIngredientIdx: new Set(), changedStepIdx: new Set() };
   const scaleRatio = state.servings / Math.max(1, r.servings || state.servings || 1);
   const saved = isSaved(r);
-  const heroUrl = resolveRecipeImage(r);
+  const heroMeta = resolveRecipeImageMeta(r);
+  const heroUrl = heroMeta.imageUrl;
+  const canOptInAiImage = Boolean(state.health?.aiImageGenerationAvailable) && !heroMeta.isAi;
 
   const timeDetails = [];
   if (r.prep_minutes != null) timeDetails.push(`${r.prep_minutes}m prep`);
   if (r.cook_minutes != null) timeDetails.push(`${r.cook_minutes}m cook`);
+
+  const creditHtml = heroMeta.credit
+    ? `<figcaption class="hero-credit">Photo · ${
+        heroMeta.creditUrl
+          ? `<a href="${esc(heroMeta.creditUrl)}" target="_blank" rel="noopener noreferrer">${esc(heroMeta.credit)}</a>`
+          : esc(heroMeta.credit)
+      }</figcaption>`
+    : "";
 
   const heroHtml = heroUrl
     ? `
@@ -801,11 +883,13 @@ function renderRecipe() {
         <div class="hero-tools">
           <button type="button" class="hero-btn" id="hero-color-btn">${state.heroColor ? "B&W" : "Color"}</button>
           <button type="button" class="hero-btn" id="hero-refresh-btn">New photo</button>
+          ${canOptInAiImage ? `<button type="button" class="hero-btn" id="hero-ai-btn">Generate with AI</button>` : ""}
         </div>
+        ${creditHtml}
       </figure>
     `
     : state.heroImageLoading
-    ? `<figure class="recipe-hero"><div class="dish-frame is-loading"><div class="dish-frame-empty">Plating photograph…</div></div></figure>`
+    ? `<figure class="recipe-hero"><div class="dish-frame is-loading"><div class="dish-frame-empty">Finding dish photograph…</div></div></figure>`
     : "";
 
   const ingHtml = (r.ingredients || [])
@@ -1091,12 +1175,17 @@ function bindRecipeEvents() {
 
   $("#hero-refresh-btn", view)?.addEventListener("click", () => {
     const r = activeRecipe();
-    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true });
+    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true, useAi: state.aiImagesOptIn });
+  });
+
+  $("#hero-ai-btn", view)?.addEventListener("click", () => {
+    const r = activeRecipe();
+    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true, useAi: true });
   });
 
   $("#gen-photo-btn", view)?.addEventListener("click", () => {
     const r = activeRecipe();
-    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true });
+    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true, useAi: state.aiImagesOptIn });
   });
 
   $("#copy-md-btn", view)?.addEventListener("click", (e) => {
@@ -1445,19 +1534,27 @@ function renderDock() {
 
 /* ---------------- Streaming Generation & Revision ---------------- */
 
-async function runRecipeStream(endpoint, payload, phaseLabel = "Writing", preloadedImageUrl = "") {
+async function runRecipeStream(endpoint, payload, phaseLabel = "Writing", preloadedImage = null) {
   if (state.streaming) return;
   clearErrors();
 
   const isFromHome = endpoint === "/api/generate";
-  const prevHero = !isFromHome ? resolveRecipeImage(activeRecipe()) : preloadedImageUrl;
+  const prevMeta = !isFromHome
+    ? resolveRecipeImageMeta(activeRecipe())
+    : typeof preloadedImage === "string"
+    ? { imageUrl: preloadedImage, credit: "", creditUrl: "", isAi: false }
+    : preloadedImage || { imageUrl: "", credit: "", creditUrl: "", isAi: false };
+  const prevHero = prevMeta.imageUrl || "";
 
   if (isFromHome) {
     state.versions = [
       {
         title: payload.selectedOption?.title || "Writing your recipe…",
         tagline: payload.selectedOption?.tagline || "",
-        imageUrl: preloadedImageUrl || "",
+        imageUrl: prevHero,
+        imageCredit: prevMeta.credit || "",
+        imageCreditUrl: prevMeta.creditUrl || "",
+        imageIsAi: Boolean(prevMeta.isAi),
         ingredients: [],
         steps: []
       }
@@ -1525,6 +1622,9 @@ async function runRecipeStream(endpoint, payload, phaseLabel = "Writing", preloa
     if (finalRecipe) {
       if (prevHero) {
         finalRecipe.imageUrl = prevHero;
+        finalRecipe.imageCredit = prevMeta.credit || "";
+        finalRecipe.imageCreditUrl = prevMeta.creditUrl || "";
+        finalRecipe.imageIsAi = Boolean(prevMeta.isAi);
       }
       if (isFromHome) {
         state.versions = [finalRecipe];
@@ -1737,7 +1837,7 @@ function formatGroceryList(r) {
 /* ---------------- Provider Picker Dialog (Server-Secret Only) ---------------- */
 
 function getProviderList() {
-  return state.health?.providers || FALLBACK_PROVIDERS;
+  return state.health?.providers?.length ? state.health.providers : FALLBACK_PROVIDERS;
 }
 
 function hasAnyConfiguredProvider() {
@@ -1761,7 +1861,10 @@ function updateAiHeaderBadge() {
   $("#ai-label").textContent = active ? active.label.replace(/^Google |^Anthropic |^Local /, "") : "Provider";
 
   const note = $("#ai-note");
-  if (state.health && !hasAnyConfiguredProvider()) {
+  if (state.health?.staticOnly) {
+    note.hidden = false;
+    note.innerHTML = `Static Pages mode active — sample recipes, Cook Mode, and open food photography work out of the box. Connect a Cloudflare Worker backend via GitHub Secrets to unlock live AI generation.`;
+  } else if (state.health && !hasAnyConfiguredProvider()) {
     note.hidden = false;
     note.innerHTML = `No server AI keys configured yet (add them as GitHub Secrets or <code>.env</code>). <button type="button" class="link-btn" id="open-ai-from-note">View providers</button> or explore the samples above.`;
     $("#open-ai-from-note")?.addEventListener("click", openAiDialog);
@@ -1799,7 +1902,7 @@ function openAiDialog() {
               >
                 <span class="prov-item-main">
                   <strong>${esc(p.label)}</strong>
-                  <small>${p.supportsImages ? "Recipes + dish photography" : "Recipes & culinary text"}</small>
+                  <small>${p.supportsImages ? "Recipes + optional AI photography" : "Recipes & culinary text"}</small>
                 </span>
                 <span class="prov-status">${p.configured ? "Ready" : "Not configured"}</span>
               </button>
@@ -1808,10 +1911,31 @@ function openAiDialog() {
           .join("")}
       </div>
 
+      <div class="img-optin-box">
+        <div class="img-optin-head">
+          <div>
+            <strong>Dish Photography</strong>
+            <small>Default uses free open photography (Openverse, Wikimedia Commons, TheMealDB). Opt in to generate custom AI photos.</small>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked="${state.aiImagesOptIn}"
+            class="tbtn ${state.aiImagesOptIn ? "is-active" : ""}"
+            id="ai-images-toggle"
+          >${state.aiImagesOptIn ? "On · AI opt-in" : "Off · Open web photos"}</button>
+        </div>
+      </div>
+
       <p class="field-help">Models and API keys are managed securely on the server via GitHub Secrets / environment variables.</p>
     `;
 
     dialog.querySelector("#ai-close-btn").addEventListener("click", () => closeTopLayer(dialog));
+    dialog.querySelector("#ai-images-toggle").addEventListener("click", () => {
+      state.aiImagesOptIn = !state.aiImagesOptIn;
+      saveAiImagesOptIn(state.aiImagesOptIn);
+      renderDialog();
+    });
     dialog.querySelectorAll("[data-pick-prov]").forEach((btn) => {
       btn.addEventListener("click", () => {
         selectedId = btn.dataset.pickProv;

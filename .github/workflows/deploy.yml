@@ -1,0 +1,136 @@
+name: Deploy Mise (GitHub Pages + Cloudflare Worker)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm test
+
+  deploy-worker:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      api_url: ${{ steps.worker.outputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Deploy Cloudflare Worker & Sync Secrets
+        id: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEFAULT_PROVIDER: ${{ secrets.DEFAULT_PROVIDER || vars.DEFAULT_PROVIDER }}
+          IMAGE_PROVIDER: ${{ secrets.IMAGE_PROVIDER || vars.IMAGE_PROVIDER }}
+          ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS || vars.ALLOWED_ORIGINS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || vars.GEMINI_MODEL }}
+          GEMINI_IMAGE_MODEL: ${{ secrets.GEMINI_IMAGE_MODEL || vars.GEMINI_IMAGE_MODEL }}
+          META_API_KEY: ${{ secrets.META_API_KEY }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          META_MODEL: ${{ secrets.META_MODEL || vars.META_MODEL }}
+          META_IMAGE_MODEL: ${{ secrets.META_IMAGE_MODEL || vars.META_IMAGE_MODEL }}
+          META_BASE_URL: ${{ secrets.META_BASE_URL || vars.META_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || vars.OPENAI_MODEL }}
+          OPENAI_IMAGE_MODEL: ${{ secrets.OPENAI_IMAGE_MODEL || vars.OPENAI_IMAGE_MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL || vars.ANTHROPIC_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || vars.OPENROUTER_MODEL }}
+          OPENROUTER_IMAGE_MODEL: ${{ secrets.OPENROUTER_IMAGE_MODEL || vars.OPENROUTER_IMAGE_MODEL }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "api_url=" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Cloudflare Worker deployment skipped"
+              echo "GitHub Pages will still deploy in static mode (sample recipes, Cook Mode, and open food photography work immediately)."
+              echo "To enable live AI with your GitHub Secrets, add \`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` in **Settings → Secrets and variables → Actions** and re-run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          set -o pipefail
+          trap 'rm -f /tmp/worker-secrets.json /tmp/wrangler-deploy.log' EXIT
+          npx --yes wrangler@3 deploy 2>&1 | tee /tmp/wrangler-deploy.log
+          WORKER_URL=$(grep -oE 'https://[A-Za-z0-9._-]+\.workers\.dev' /tmp/wrangler-deploy.log | head -n1 || true)
+          echo "api_url=${WORKER_URL}" >> "$GITHUB_OUTPUT"
+
+          node -e '
+            const keys = [
+              "DEFAULT_PROVIDER", "IMAGE_PROVIDER", "ALLOWED_ORIGINS",
+              "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_IMAGE_MODEL",
+              "META_API_KEY", "MODEL_API_KEY", "META_MODEL", "META_IMAGE_MODEL", "META_BASE_URL",
+              "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_IMAGE_MODEL",
+              "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL",
+              "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_IMAGE_MODEL"
+            ];
+            const out = {};
+            for (const k of keys) {
+              const v = (process.env[k] || "").trim();
+              if (v) out[k] = v;
+            }
+            if (Object.keys(out).length === 0) process.exit(0);
+            process.stdout.write(JSON.stringify(out));
+          ' > /tmp/worker-secrets.json
+
+          if [ -s /tmp/worker-secrets.json ]; then
+            npx --yes wrangler@3 secret bulk /tmp/worker-secrets.json
+          fi
+
+  build-pages:
+    needs: [test, deploy-worker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build Static Site Artifact
+        env:
+          API_BASE_URL: ${{ vars.MISE_API_URL || secrets.MISE_API_URL || needs.deploy-worker.outputs.api_url }}
+        run: |
+          rm -rf _site
+          cp -R public _site
+          touch _site/.nojekyll
+          node -e '
+            const fs = require("node:fs");
+            const apiBaseUrl = (process.env.API_BASE_URL || "").trim().replace(/\/+$/, "");
+            fs.writeFileSync("_site/config.js", "window.__MISE_CONFIG__ = " + JSON.stringify({ apiBaseUrl }) + ";\n");
+          '
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  deploy-pages:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build-pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

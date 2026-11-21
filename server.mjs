@@ -19,6 +19,13 @@ import {
   extractJsonObject,
   generateDishImage
 } from "./server/providers.mjs";
+import {
+  isOriginAllowed,
+  buildCorsHeaders,
+  isValidRecipe,
+  normalizeRecipe,
+  normalizeIdeasPayload
+} from "./server/http-helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.join(__dirname, "public");
@@ -39,14 +46,15 @@ const MIME_TYPES = {
   ".ico": "image/x-icon"
 };
 
-function sendJson(res, status, data) {
+function sendJson(res, status, data, extraHeaders = {}) {
   if (res.writableEnded) return;
   const body = JSON.stringify(data);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
     "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff"
+    "X-Content-Type-Options": "nosniff",
+    ...extraHeaders
   });
   res.end(body);
 }
@@ -79,82 +87,7 @@ async function readJsonBody(req) {
   }
 }
 
-function isValidRecipe(recipe) {
-  return Boolean(
-    recipe &&
-      typeof recipe === "object" &&
-      typeof recipe.title === "string" &&
-      recipe.title.trim() &&
-      Array.isArray(recipe.ingredients) &&
-      recipe.ingredients.length > 0 &&
-      Array.isArray(recipe.steps) &&
-      recipe.steps.length > 0
-  );
-}
-
-function normalizeRecipe(raw) {
-  if (!raw || typeof raw !== "object") return raw;
-  const prep = Number.isFinite(Number(raw.prep_minutes)) ? Math.max(0, Math.round(Number(raw.prep_minutes))) : null;
-  const cook = Number.isFinite(Number(raw.cook_minutes)) ? Math.max(0, Math.round(Number(raw.cook_minutes))) : null;
-  const total = Number.isFinite(Number(raw.time_minutes))
-    ? Math.max(1, Math.round(Number(raw.time_minutes)))
-    : (prep ?? 0) + (cook ?? 0) || 25;
-
-  return {
-    title: String(raw.title || "").trim(),
-    tagline: String(raw.tagline || "").trim(),
-    prep_minutes: prep,
-    cook_minutes: cook,
-    time_minutes: total,
-    difficulty: ["Easy", "Medium", "Hard"].includes(raw.difficulty) ? raw.difficulty : "Medium",
-    servings: Math.max(1, Math.round(Number(raw.servings) || 4)),
-    cuisine: String(raw.cuisine || "").trim(),
-    visual_prompt: String(raw.visual_prompt || "").trim(),
-    ingredients: (raw.ingredients || []).map((ing) => ({
-      item: String(ing?.item || "").trim(),
-      amount: ing?.amount === null || ing?.amount === undefined || ing?.amount === "" ? null : Number(ing.amount),
-      unit: String(ing?.unit || "").trim(),
-      note: String(ing?.note || "").trim()
-    })).filter((ing) => ing.item),
-    steps: (raw.steps || []).map((st) => ({
-      title: String(st?.title || "Step").trim(),
-      text: String(st?.text || "").trim(),
-      minutes: st?.minutes === null || st?.minutes === undefined || st?.minutes === "" ? null : Number(st.minutes)
-    })).filter((st) => st.text),
-    tips: Array.isArray(raw.tips) ? raw.tips.map((t) => String(t || "").trim()).filter(Boolean) : [],
-    ...(raw.change_summary ? { change_summary: String(raw.change_summary).trim() } : {})
-  };
-}
-
-function normalizeIdeasPayload(raw) {
-  if (!raw || typeof raw !== "object" || !Array.isArray(raw.options)) return null;
-  const options = raw.options
-    .slice(0, 6)
-    .map((opt, idx) => ({
-      id: String(opt?.id || `opt-${idx + 1}`).trim(),
-      title: String(opt?.title || "").trim(),
-      tagline: String(opt?.tagline || "").trim(),
-      time_minutes: Number.isFinite(Number(opt?.time_minutes)) ? Math.max(1, Math.round(Number(opt.time_minutes))) : 25,
-      difficulty: ["Easy", "Medium", "Hard"].includes(opt?.difficulty) ? opt.difficulty : "Medium",
-      cuisine: String(opt?.cuisine || "").trim(),
-      vibe: String(opt?.vibe || "").trim(),
-      uses: Array.isArray(opt?.uses) ? opt.uses.map((s) => String(s || "").trim()).filter(Boolean) : [],
-      extras_needed: Array.isArray(opt?.extras_needed)
-        ? opt.extras_needed.map((s) => String(s || "").trim()).filter(Boolean)
-        : [],
-      pantry_only: Boolean(opt?.pantry_only),
-      visual_prompt: String(opt?.visual_prompt || "").trim()
-    }))
-    .filter((opt) => opt.title);
-
-  if (!options.length) return null;
-  return {
-    prompt_summary: String(raw.prompt_summary || "").trim(),
-    options
-  };
-}
-
-async function handleSseRecipeStream(req, res, providerOpts, prompt, fetchImpl, env) {
+async function handleSseRecipeStream(req, res, providerOpts, prompt, fetchImpl, env, corsHeaders) {
   resolveCredentials({ provider: providerOpts.provider }, env);
 
   const controller = new AbortController();
@@ -166,7 +99,8 @@ async function handleSseRecipeStream(req, res, providerOpts, prompt, fetchImpl, 
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
-    "X-Content-Type-Options": "nosniff"
+    "X-Content-Type-Options": "nosniff",
+    ...corsHeaders
   });
 
   try {
@@ -270,13 +204,30 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
   return http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
     const { pathname } = url;
+    const origin = req.headers.origin || "";
+    const corsHeaders = buildCorsHeaders(origin, env);
+
+    if (pathname.startsWith("/api/") && origin && !isOriginAllowed(origin, env)) {
+      return sendJson(res, 403, { error: "Origin not allowed." });
+    }
+
+    if (req.method === "OPTIONS" && pathname.startsWith("/api/")) {
+      res.writeHead(204, corsHeaders);
+      res.end();
+      return;
+    }
 
     try {
       if (req.method === "GET" && pathname === "/api/health") {
-        return sendJson(res, 200, {
-          ok: true,
-          ...getPublicProviderCatalog(env)
-        });
+        return sendJson(
+          res,
+          200,
+          {
+            ok: true,
+            ...getPublicProviderCatalog(env)
+          },
+          corsHeaders
+        );
       }
 
       if (req.method === "POST" && pathname === "/api/ideas") {
@@ -285,7 +236,7 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
         const ingredients = Array.isArray(body.ingredients) ? body.ingredients : [];
         const images = Array.isArray(body.images) ? body.images : [];
         if (!query && !ingredients.length && !images.length) {
-          return sendJson(res, 400, { error: "Enter ingredients, a dish idea, or attach a photo first." });
+          return sendJson(res, 400, { error: "Enter ingredients, a dish idea, or attach a photo first." }, corsHeaders);
         }
 
         const prompt = buildIdeasPrompt({
@@ -317,29 +268,31 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
         );
 
         if (raw?.error) {
-          return sendJson(res, 400, { error: String(raw.error) });
+          return sendJson(res, 400, { error: String(raw.error) }, corsHeaders);
         }
         const normalized = normalizeIdeasPayload(raw);
         if (!normalized) {
-          return sendJson(res, 502, { error: "Could not build dish options. Try rephrasing." });
+          return sendJson(res, 502, { error: "Could not build dish options. Try rephrasing." }, corsHeaders);
         }
-        return sendJson(res, 200, normalized);
+        return sendJson(res, 200, normalized, corsHeaders);
       }
 
       if (req.method === "POST" && pathname === "/api/dish-image") {
         const body = await readJsonBody(req);
         const title = String(body.title || "").trim();
         if (!title) {
-          return sendJson(res, 400, { error: "Dish title is required." });
+          return sendJson(res, 400, { error: "Dish title is required." }, corsHeaders);
         }
+        const useAi = Boolean(body.useAi);
+        const excludeUrls = Array.isArray(body.excludeUrls) ? body.excludeUrls : [];
         const visualPrompt = String(body.visualPrompt || "").trim();
-        const cacheKey = `${title.toLowerCase()}|${visualPrompt.toLowerCase()}`;
+        const cacheKey = `${useAi ? "ai" : "open"}|${title.toLowerCase()}|${visualPrompt.toLowerCase()}`;
 
-        if (!body.forceRefresh && imageCache.has(cacheKey)) {
+        if (!body.forceRefresh && excludeUrls.length === 0 && imageCache.has(cacheKey)) {
           const cached = imageCache.get(cacheKey);
           imageCache.delete(cacheKey);
           imageCache.set(cacheKey, cached);
-          return sendJson(res, 200, { ...cached, cached: true });
+          return sendJson(res, 200, { ...cached, cached: true }, corsHeaders);
         }
 
         const controller = new AbortController();
@@ -353,13 +306,15 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
           cuisine: body.cuisine,
           visualPrompt,
           provider: body.provider,
+          useAi,
+          excludeUrls,
           env,
           fetchImpl,
           signal: controller.signal
         });
 
         rememberImage(cacheKey, result);
-        return sendJson(res, 200, result);
+        return sendJson(res, 200, result, corsHeaders);
       }
 
       if (req.method === "POST" && pathname === "/api/generate") {
@@ -369,7 +324,7 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
         const images = Array.isArray(body.images) ? body.images : [];
         const selectedOption = body.selectedOption && typeof body.selectedOption === "object" ? body.selectedOption : null;
         if (!query && !ingredients.length && !images.length && !selectedOption?.title) {
-          return sendJson(res, 400, { error: "Ask for a dish, add ingredients, or attach a photo first." });
+          return sendJson(res, 400, { error: "Ask for a dish, add ingredients, or attach a photo first." }, corsHeaders);
         }
         const prompt = buildGeneratePrompt({
           query,
@@ -385,18 +340,19 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
           { provider: body.provider, images },
           prompt,
           fetchImpl,
-          env
+          env,
+          corsHeaders
         );
       }
 
       if (req.method === "POST" && pathname === "/api/revise") {
         const body = await readJsonBody(req);
         if (!isValidRecipe(body.recipe)) {
-          return sendJson(res, 400, { error: "A valid current recipe is required to revise." });
+          return sendJson(res, 400, { error: "A valid current recipe is required to revise." }, corsHeaders);
         }
         const instruction = String(body.instruction || "").trim();
         if (!instruction) {
-          return sendJson(res, 400, { error: "Describe what you want to change." });
+          return sendJson(res, 400, { error: "Describe what you want to change." }, corsHeaders);
         }
         const prompt = buildRevisePrompt({
           recipe: body.recipe,
@@ -409,18 +365,19 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
           { provider: body.provider },
           prompt,
           fetchImpl,
-          env
+          env,
+          corsHeaders
         );
       }
 
       if (req.method === "POST" && pathname === "/api/apply-swap") {
         const body = await readJsonBody(req);
         if (!isValidRecipe(body.recipe) || body.ingredientIndex == null || !body.swap) {
-          return sendJson(res, 400, { error: "Recipe, ingredientIndex, and swap are required." });
+          return sendJson(res, 400, { error: "Recipe, ingredientIndex, and swap are required." }, corsHeaders);
         }
         const idx = Number(body.ingredientIndex);
         if (!Number.isInteger(idx) || idx < 0 || idx >= body.recipe.ingredients.length) {
-          return sendJson(res, 400, { error: "Ingredient index out of range." });
+          return sendJson(res, 400, { error: "Ingredient index out of range." }, corsHeaders);
         }
         const prompt = buildApplySwapPrompt({
           recipe: body.recipe,
@@ -434,18 +391,19 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
           { provider: body.provider },
           prompt,
           fetchImpl,
-          env
+          env,
+          corsHeaders
         );
       }
 
       if (req.method === "POST" && pathname === "/api/ingredient-intel") {
         const body = await readJsonBody(req);
         if (!isValidRecipe(body.recipe) || body.ingredientIndex == null) {
-          return sendJson(res, 400, { error: "Recipe and ingredientIndex are required." });
+          return sendJson(res, 400, { error: "Recipe and ingredientIndex are required." }, corsHeaders);
         }
         const idx = Number(body.ingredientIndex);
         if (!Number.isInteger(idx) || idx < 0 || idx >= body.recipe.ingredients.length) {
-          return sendJson(res, 400, { error: "Ingredient index out of range." });
+          return sendJson(res, 400, { error: "Ingredient index out of range." }, corsHeaders);
         }
         const prompt = buildIngredientIntelPrompt({
           recipe: body.recipe,
@@ -468,17 +426,17 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
           },
           controller.signal
         );
-        return sendJson(res, 200, out);
+        return sendJson(res, 200, out, corsHeaders);
       }
 
       if (req.method === "POST" && pathname === "/api/step-help") {
         const body = await readJsonBody(req);
         if (!isValidRecipe(body.recipe) || body.stepIndex == null || !String(body.question || "").trim()) {
-          return sendJson(res, 400, { error: "Recipe, stepIndex, and a question are required." });
+          return sendJson(res, 400, { error: "Recipe, stepIndex, and a question are required." }, corsHeaders);
         }
         const idx = Number(body.stepIndex);
         if (!Number.isInteger(idx) || idx < 0 || idx >= body.recipe.steps.length) {
-          return sendJson(res, 400, { error: "Step index out of range." });
+          return sendJson(res, 400, { error: "Step index out of range." }, corsHeaders);
         }
         const prompt = buildStepHelpPrompt({
           recipe: body.recipe,
@@ -501,13 +459,13 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
           },
           controller.signal
         );
-        return sendJson(res, 200, out);
+        return sendJson(res, 200, out, corsHeaders);
       }
 
       if (req.method === "POST" && pathname === "/api/enrich") {
         const body = await readJsonBody(req);
         if (!isValidRecipe(body.recipe) || !body.section) {
-          return sendJson(res, 400, { error: "Recipe and section are required." });
+          return sendJson(res, 400, { error: "Recipe and section are required." }, corsHeaders);
         }
         const prompt = buildEnrichPrompt({
           recipe: body.recipe,
@@ -529,22 +487,22 @@ export function createServer({ fetchImpl = fetch, publicDir = DEFAULT_PUBLIC_DIR
           },
           controller.signal
         );
-        return sendJson(res, 200, out);
+        return sendJson(res, 200, out, corsHeaders);
       }
 
       if (pathname.startsWith("/api/")) {
-        return sendJson(res, 404, { error: "Unknown API route." });
+        return sendJson(res, 404, { error: "Unknown API route." }, corsHeaders);
       }
 
       if (req.method === "GET" || req.method === "HEAD") {
         return await serveStatic(res, publicDir, pathname);
       }
 
-      return sendJson(res, 405, { error: "Method not allowed." });
+      return sendJson(res, 405, { error: "Method not allowed." }, corsHeaders);
     } catch (err) {
       if (err?.name === "AbortError") return;
       const status = Number.isInteger(err?.status) ? err.status : 500;
-      sendJson(res, status, { error: err?.message || "Internal server error." });
+      sendJson(res, status, { error: err?.message || "Internal server error." }, corsHeaders);
     }
   });
 }
