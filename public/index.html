@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<script>
+try {
+  document.querySelector('meta[name="color-scheme"]').content = localStorage.getItem("color-scheme") ?? "light dark";
+} catch (e) {}
+</script>
+<title>Mise — a recipe for anything</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="site-head">
+    <button type="button" class="logo" id="home-btn">Mise</button>
+    <nav class="head-nav" aria-label="Workspace tools">
+      <button type="button" class="tbtn" id="kitchen-btn">
+        Kitchen <span class="badge-dot" id="kitchen-dot" hidden aria-label="Active profile constraints"></span>
+      </button>
+      <button type="button" class="tbtn" id="ai-btn">
+        <span id="ai-label">Provider</span>
+      </button>
+      <button type="button" class="tbtn" id="theme-btn">Invert</button>
+    </nav>
+  </header>
+
+  <main id="home-view">
+    <h1>Ask for any dish.<br>Get the recipe.</h1>
+
+    <div class="mode-row" id="mode-row" role="group" aria-label="Creation mode">
+      <button type="button" class="chip is-active" data-mode="any" aria-pressed="true">Any dish</button>
+      <button type="button" class="chip" data-mode="fridge" aria-pressed="false">What I have</button>
+      <button type="button" class="chip" data-mode="craving" aria-pressed="false">With ingredient X</button>
+      <button type="button" class="chip" data-mode="recreate" aria-pressed="false">Recreate</button>
+      <button type="button" class="chip" data-mode="mealprep" aria-pressed="false">Meal prep</button>
+      <button type="button" class="chip" data-mode="drink" aria-pressed="false">Drink</button>
+    </div>
+
+    <div class="ing-tags-bar" id="ing-tags-bar" hidden>
+      <div class="ing-tag-list" id="ing-tag-list"></div>
+      <div class="ing-tag-entry">
+        <input id="ing-tag-input" type="text" autocomplete="off" placeholder="Add an ingredient & press Enter (e.g. miso, mushrooms, eggs)" aria-label="Add ingredient tag">
+        <button type="button" class="tbtn" id="ing-tag-add">Add</button>
+      </div>
+    </div>
+
+    <form class="ask home-ask" id="ask-form" onsubmit="return false">
+      <input id="q" type="text" autocomplete="off" placeholder="Miso mushroom pasta, or eggs and rice" aria-label="What do you want to cook?">
+      <label class="photo-btn" for="photo-input" title="Attach fridge or dish photo (or drag & paste)">
+        <span>Photo</span>
+        <input id="photo-input" type="file" accept="image/*" multiple hidden>
+      </label>
+      <button class="tbtn alt-submit" id="alt-submit" type="button">Options grid</button>
+      <button class="go" id="cook-submit" type="submit">Cook</button>
+    </form>
+
+    <div class="photo-strip" id="photo-strip" hidden></div>
+    <div class="chips" id="sugg"></div>
+
+    <div class="home-samples">
+      <span>Test-kitchen samples:</span>
+      <button type="button" class="link-btn" id="sample-ideas-btn">Browse dish options grid</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" class="link-btn" data-sample="0">Brown Butter Miso Rigatoni</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" class="link-btn" data-sample="1">Black Sesame Skillet Cookie</button>
+    </div>
+
+    <p class="note" id="ai-note" hidden></p>
+    <div id="home-err" class="err" hidden></div>
+
+    <section class="library" id="library" hidden aria-label="Your recipes">
+      <div class="lib-tabs">
+        <button type="button" class="lib-tab is-active" data-lib="recent">Recent</button>
+        <button type="button" class="lib-tab" data-lib="saved">Saved <span id="saved-count"></span></button>
+      </div>
+      <div class="rlist" id="rlist"></div>
+    </section>
+  </main>
+
+  <main id="ideas-view" hidden></main>
+  <main id="view" hidden></main>
+  <div id="view-err" class="err" hidden></div>
+</div>
+
+<div class="timer-bar" id="timer-bar" hidden aria-live="polite"></div>
+
+<div class="dock" id="dock" hidden>
+  <div class="in">
+    <div class="dock-top">
+      <div class="version-pills" id="version-pills"></div>
+      <div class="chips dock-chips" id="tweaks"></div>
+    </div>
+    <form class="ask" id="revise-form" onsubmit="return false">
+      <input id="tw" type="text" autocomplete="off" placeholder="Change anything: make it vegan, use what’s in my fridge, half the salt" aria-label="Change this recipe">
+      <button class="go" id="revise-submit" type="submit">Revise</button>
+    </form>
+  </div>
+</div>
+
+<div id="ing-popover" popover="auto" class="ai-pop" aria-label="Ingredient intelligence"></div>
+<div id="step-popover" popover="auto" class="ai-pop" aria-label="Ask chef about this step"></div>
+
+<dialog id="ai-dialog" class="modal-sheet" closedby="any" aria-labelledby="ai-dialog-title"></dialog>
+<dialog id="kitchen-dialog" class="modal-sheet" closedby="any" aria-labelledby="kitchen-dialog-title"></dialog>
+<dialog id="cook-dialog" class="cook-sheet" closedby="closerequest" aria-labelledby="cook-dialog-title"></dialog>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

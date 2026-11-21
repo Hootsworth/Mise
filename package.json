@@ -1,0 +1,15 @@
+{
+  "name": "mise",
+  "version": "1.0.0",
+  "description": "Mise — Editorial black-and-white AI recipe maker with multi-provider streaming, inline culinary intelligence, and hands-free Cook Mode.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
