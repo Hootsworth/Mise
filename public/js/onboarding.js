@@ -5,6 +5,11 @@ import {
   isProviderReady
 } from "./ai-client.js";
 import { renderPotSvg } from "./cooking-loader.js";
+import {
+  GROCERY_PLATFORMS,
+  FOOD_PLATFORMS,
+  createDefaultDeliveryPrefs
+} from "./delivery-links.js";
 
 export const ONBOARDING_STORAGE_KEY = "mise:onboarded:v1";
 
@@ -88,8 +93,8 @@ function sliderPercent(value, min = 0, max = 1.2) {
 }
 
 /**
- * Renders the calm 4-step full-screen onboarding flow.
- * Every choice saved here maps directly to Kitchen Profile & BYOK Settings.
+ * Renders the calm 5-step full-screen onboarding flow.
+ * Every choice saved here maps directly to Kitchen Profile, BYOK & Delivery Preferences.
  */
 export function renderOnboardingView(rootEl, ctx) {
   if (!rootEl) return;
@@ -98,22 +103,27 @@ export function renderOnboardingView(rootEl, ctx) {
   let direction = "next"; // "next" | "prev"
   let showKey = false;
   let modelStatus = "";
+  let authNote = "";
+  let authBusy = false;
   let fetchedModels = {};
   const kpDraft = structuredClone(ctx.profile);
   const aiDraft = structuredClone(ctx.aiSettings);
+  const deliveryDraft = structuredClone(ctx.deliveryPrefs || createDefaultDeliveryPrefs());
+  let mcpState = structuredClone(ctx.mcpStatus || { available: false, origin: "", providers: {} });
 
   const goStep = (nextStep) => {
     syncCurrentStepInputs();
     direction = nextStep >= step ? "next" : "prev";
-    step = Math.max(1, Math.min(4, nextStep));
+    step = Math.max(1, Math.min(5, nextStep));
     modelStatus = "";
+    authNote = "";
     render(true);
   };
 
   const finish = ({ skipped = false } = {}) => {
     syncCurrentStepInputs();
     markOnboardingComplete(skipped ? "skipped" : "done");
-    ctx.onComplete?.({ aiSettings: aiDraft, profile: kpDraft, skipped });
+    ctx.onComplete?.({ aiSettings: aiDraft, profile: kpDraft, deliveryPrefs: deliveryDraft, skipped });
   };
 
   const syncCurrentStepInputs = () => {
@@ -135,6 +145,9 @@ export function renderOnboardingView(rootEl, ctx) {
       if (keyEl) aiDraft.providers[pid].apiKey = keyEl.value.trim();
       if (modEl) aiDraft.providers[pid].model = modEl.value.trim();
       if (tempEl) aiDraft.temperature = Number(tempEl.value);
+    } else if (step === 5) {
+      const cityEl = rootEl.querySelector("#ob-city");
+      if (cityEl) deliveryDraft.city = cityEl.value.trim();
     }
   };
 
@@ -264,30 +277,172 @@ export function renderOnboardingView(rootEl, ctx) {
       `;
     }
 
-    const id = aiDraft.activeProvider;
-    const cfg = getProviderConfig(aiDraft, id);
-    const liveList = fetchedModels[id] || [];
-    const modelOptions = Array.from(new Set([...liveList, ...(cfg.presets || [])])).filter(Boolean);
+    if (step === 4) {
+      const id = aiDraft.activeProvider;
+      const cfg = getProviderConfig(aiDraft, id);
+      const liveList = fetchedModels[id] || [];
+      const modelOptions = Array.from(new Set([...liveList, ...(cfg.presets || [])])).filter(Boolean);
+
+      return `
+        <div class="ob-panel">
+          <span class="ob-step-tag">Step 04 · Bring Your Own AI</span>
+          <h1 id="ob-heading" tabindex="-1" class="ob-title">Connect a model &amp; photos.</h1>
+          <p class="ob-sub">API keys stay strictly in this browser. Prefer exploring samples first? Skip AI for now.</p>
+
+          <fieldset class="st-group">
+            <legend>Choose AI provider</legend>
+            <div class="prov-grid">
+              ${PROVIDER_ORDER.map((pid) => {
+                const meta = PROVIDERS[pid];
+                const checked = pid === id;
+                const tag = pid === "ollama" ? "Local" : isProviderReady(aiDraft, pid) ? "Ready" : "Optional";
+                return `
+                  <div class="prov-card-wrap">
+                    <input class="visually-hidden" type="radio" id="ob-prov-${esc(pid)}" name="ob-provider" value="${esc(pid)}" ${checked ? "checked" : ""}>
+                    <label class="prov-card ${checked ? "is-selected" : ""}" for="ob-prov-${esc(pid)}">
+                      <span class="prov-card-name">${esc(meta.label)}</span>
+                      <span class="prov-card-tag">${esc(tag)}</span>
+                    </label>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </fieldset>
+
+          ${
+            cfg.editableBaseUrl
+              ? `
+            <div class="st-field">
+              <label for="ob-baseurl">Endpoint Base URL</label>
+              <input type="url" id="ob-baseurl" value="${esc(aiDraft.providers[id].baseUrl)}" placeholder="${esc(cfg.defaultBaseUrl || "https://...")}" autocorrect="off" autocapitalize="none" spellcheck="false">
+            </div>
+          `
+              : ""
+          }
+
+          ${
+            id !== "ollama"
+              ? `
+            <div class="st-field">
+              <label for="ob-apikey">${esc(cfg.label)} API Key (optional now)</label>
+              <div class="st-input-row">
+                <input
+                  type="${showKey ? "text" : "password"}"
+                  id="ob-apikey"
+                  value="${esc(aiDraft.providers[id].apiKey)}"
+                  placeholder="${esc(cfg.keyPlaceholder || "Paste API key")}"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                >
+                <button type="button" class="tbtn" id="ob-key-toggle" aria-pressed="${showKey}">${showKey ? "Hide" : "Show"}</button>
+              </div>
+            </div>
+          `
+              : ""
+          }
+
+          <div class="st-field">
+            <label for="ob-model">Model ID</label>
+            <div class="st-input-row">
+              <input type="text" id="ob-model" list="ob-model-list" value="${esc(aiDraft.providers[id].model)}" placeholder="${esc(cfg.defaultModel || "Enter model ID")}" autocorrect="off" autocapitalize="none" spellcheck="false">
+              <button type="button" class="tbtn" id="ob-fetch-models">Fetch models</button>
+            </div>
+            <datalist id="ob-model-list">
+              ${modelOptions.map((m) => `<option value="${esc(m)}">`).join("")}
+            </datalist>
+            ${
+              modelOptions.length
+                ? `
+              <div class="st-presets">
+                ${modelOptions
+                  .slice(0, 6)
+                  .map(
+                    (m) =>
+                      `<button type="button" class="chip ${aiDraft.providers[id].model === m ? "is-active" : ""}" data-ob-model="${esc(m)}">${esc(m)}</button>`
+                  )
+                  .join("")}
+              </div>
+            `
+                : ""
+            }
+            ${modelStatus ? `<p class="st-help" role="status" aria-live="polite">${esc(modelStatus)}</p>` : ""}
+          </div>
+
+          <div class="st-field">
+            <div class="st-range-head">
+              <label for="ob-temp">Creativity (Temperature)</label>
+              <span class="m3-range-badge" id="ob-temp-val">${Number(aiDraft.temperature).toFixed(1)}</span>
+            </div>
+            <div class="st-range-row">
+              <span>Precise</span>
+              <input
+                class="m3-slider"
+                type="range"
+                id="ob-temp"
+                min="0"
+                max="1.2"
+                step="0.1"
+                value="${esc(aiDraft.temperature)}"
+                style="--val-pct: ${sliderPercent(aiDraft.temperature)}"
+              >
+              <span>Inventive</span>
+            </div>
+          </div>
+
+          <fieldset class="st-group">
+            <legend>Dish photography</legend>
+            <div class="prov-grid prov-grid-2">
+              <div class="prov-card-wrap">
+                <input class="visually-hidden" type="radio" id="ob-img-open" name="ob-img-mode" value="open" ${aiDraft.imageMode === "open" ? "checked" : ""}>
+                <label class="prov-card ${aiDraft.imageMode === "open" ? "is-selected" : ""}" for="ob-img-open">
+                  <span class="prov-card-name">Open web photos</span>
+                  <span class="prov-card-tag">Default · Free</span>
+                </label>
+              </div>
+              <div class="prov-card-wrap">
+                <input class="visually-hidden" type="radio" id="ob-img-ai" name="ob-img-mode" value="ai" ${aiDraft.imageMode === "ai" ? "checked" : ""}>
+                <label class="prov-card ${aiDraft.imageMode === "ai" ? "is-selected" : ""}" for="ob-img-ai">
+                  <span class="prov-card-name">AI-generated photos</span>
+                  <span class="prov-card-tag">Opt-in · Uses key</span>
+                </label>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="ob-foot">
+            <button type="button" class="tbtn" id="ob-prev-btn">← Back</button>
+            <div class="ob-foot-right">
+              <button type="button" class="quiet-act" id="ob-skip-ai-btn">Skip AI for now</button>
+              <button type="button" class="go ob-primary" id="ob-next-btn">Continue →</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    const companionOn = Boolean(mcpState?.available);
+    const swiggyConnected = Boolean(mcpState?.providers?.swiggy?.connected);
+    const zeptoConnected = Boolean(mcpState?.providers?.zepto?.connected);
 
     return `
       <div class="ob-panel">
-        <span class="ob-step-tag">Step 04 · Bring Your Own AI</span>
-        <h1 id="ob-heading" tabindex="-1" class="ob-title">Connect a model &amp; photos.</h1>
-        <p class="ob-sub">API keys stay strictly in this browser. Prefer exploring samples first? Skip AI for now.</p>
+        <span class="ob-step-tag">Step 05 · Delivery &amp; Apps</span>
+        <h1 id="ob-heading" tabindex="-1" class="ob-title">Groceries &amp; restaurants.</h1>
+        <p class="ob-sub">Order missing ingredients or find the dish nearby. Choose default apps — smart deep-links work everywhere, and you can connect live accounts anytime.</p>
 
         <fieldset class="st-group">
-          <legend>Choose AI provider</legend>
+          <legend>Default grocery app (missing ingredients)</legend>
           <div class="prov-grid">
-            ${PROVIDER_ORDER.map((pid) => {
-              const meta = PROVIDERS[pid];
-              const checked = pid === id;
-              const tag = pid === "ollama" ? "Local" : isProviderReady(aiDraft, pid) ? "Ready" : "Optional";
+            ${GROCERY_PLATFORMS.map((p) => {
+              const checked = deliveryDraft.preferredGrocery === p.id;
               return `
                 <div class="prov-card-wrap">
-                  <input class="visually-hidden" type="radio" id="ob-prov-${esc(pid)}" name="ob-provider" value="${esc(pid)}" ${checked ? "checked" : ""}>
-                  <label class="prov-card ${checked ? "is-selected" : ""}" for="ob-prov-${esc(pid)}">
-                    <span class="prov-card-name">${esc(meta.label)}</span>
-                    <span class="prov-card-tag">${esc(tag)}</span>
+                  <input class="visually-hidden" type="radio" id="ob-g-${esc(p.id)}" name="ob-gprov" value="${esc(p.id)}" ${checked ? "checked" : ""}>
+                  <label class="prov-card ${checked ? "is-selected" : ""}" for="ob-g-${esc(p.id)}">
+                    <span class="prov-card-name">${esc(p.shortLabel)}</span>
+                    <span class="prov-card-tag">${esc(p.badge)}</span>
                   </label>
                 </div>
               `;
@@ -295,112 +450,53 @@ export function renderOnboardingView(rootEl, ctx) {
           </div>
         </fieldset>
 
-        ${
-          cfg.editableBaseUrl
-            ? `
-          <div class="st-field">
-            <label for="ob-baseurl">Endpoint Base URL</label>
-            <input type="url" id="ob-baseurl" value="${esc(aiDraft.providers[id].baseUrl)}" placeholder="${esc(cfg.defaultBaseUrl || "https://...")}" autocorrect="off" autocapitalize="none" spellcheck="false">
-          </div>
-        `
-            : ""
-        }
-
-        ${
-          id !== "ollama"
-            ? `
-          <div class="st-field">
-            <label for="ob-apikey">${esc(cfg.label)} API Key (optional now)</label>
-            <div class="st-input-row">
-              <input
-                type="${showKey ? "text" : "password"}"
-                id="ob-apikey"
-                value="${esc(aiDraft.providers[id].apiKey)}"
-                placeholder="${esc(cfg.keyPlaceholder || "Paste API key")}"
-                autocomplete="off"
-                autocorrect="off"
-                autocapitalize="none"
-                spellcheck="false"
-              >
-              <button type="button" class="tbtn" id="ob-key-toggle" aria-pressed="${showKey}">${showKey ? "Hide" : "Show"}</button>
-            </div>
-          </div>
-        `
-            : ""
-        }
-
-        <div class="st-field">
-          <label for="ob-model">Model ID</label>
-          <div class="st-input-row">
-            <input type="text" id="ob-model" list="ob-model-list" value="${esc(aiDraft.providers[id].model)}" placeholder="${esc(cfg.defaultModel || "Enter model ID")}" autocorrect="off" autocapitalize="none" spellcheck="false">
-            <button type="button" class="tbtn" id="ob-fetch-models">Fetch models</button>
-          </div>
-          <datalist id="ob-model-list">
-            ${modelOptions.map((m) => `<option value="${esc(m)}">`).join("")}
-          </datalist>
-          ${
-            modelOptions.length
-              ? `
-            <div class="st-presets">
-              ${modelOptions
-                .slice(0, 6)
-                .map(
-                  (m) =>
-                    `<button type="button" class="chip ${aiDraft.providers[id].model === m ? "is-active" : ""}" data-ob-model="${esc(m)}">${esc(m)}</button>`
-                )
-                .join("")}
-            </div>
-          `
-              : ""
-          }
-          ${modelStatus ? `<p class="st-help" role="status" aria-live="polite">${esc(modelStatus)}</p>` : ""}
-        </div>
-
-        <div class="st-field">
-          <div class="st-range-head">
-            <label for="ob-temp">Creativity (Temperature)</label>
-            <span class="m3-range-badge" id="ob-temp-val">${Number(aiDraft.temperature).toFixed(1)}</span>
-          </div>
-          <div class="st-range-row">
-            <span>Precise</span>
-            <input
-              class="m3-slider"
-              type="range"
-              id="ob-temp"
-              min="0"
-              max="1.2"
-              step="0.1"
-              value="${esc(aiDraft.temperature)}"
-              style="--val-pct: ${sliderPercent(aiDraft.temperature)}"
-            >
-            <span>Inventive</span>
-          </div>
-        </div>
-
         <fieldset class="st-group">
-          <legend>Dish photography</legend>
+          <legend>Default restaurant app (order dish nearby)</legend>
           <div class="prov-grid prov-grid-2">
-            <div class="prov-card-wrap">
-              <input class="visually-hidden" type="radio" id="ob-img-open" name="ob-img-mode" value="open" ${aiDraft.imageMode === "open" ? "checked" : ""}>
-              <label class="prov-card ${aiDraft.imageMode === "open" ? "is-selected" : ""}" for="ob-img-open">
-                <span class="prov-card-name">Open web photos</span>
-                <span class="prov-card-tag">Default · Free</span>
-              </label>
-            </div>
-            <div class="prov-card-wrap">
-              <input class="visually-hidden" type="radio" id="ob-img-ai" name="ob-img-mode" value="ai" ${aiDraft.imageMode === "ai" ? "checked" : ""}>
-              <label class="prov-card ${aiDraft.imageMode === "ai" ? "is-selected" : ""}" for="ob-img-ai">
-                <span class="prov-card-name">AI-generated photos</span>
-                <span class="prov-card-tag">Opt-in · Uses key</span>
-              </label>
-            </div>
+            ${FOOD_PLATFORMS.map((p) => {
+              const checked = deliveryDraft.preferredFood === p.id;
+              return `
+                <div class="prov-card-wrap">
+                  <input class="visually-hidden" type="radio" id="ob-f-${esc(p.id)}" name="ob-fprov" value="${esc(p.id)}" ${checked ? "checked" : ""}>
+                  <label class="prov-card ${checked ? "is-selected" : ""}" for="ob-f-${esc(p.id)}">
+                    <span class="prov-card-name">${esc(p.label)}</span>
+                    <span class="prov-card-tag">${esc(p.badge)}</span>
+                  </label>
+                </div>
+              `;
+            }).join("")}
           </div>
         </fieldset>
+
+        <div class="st-field">
+          <label for="ob-city">City (for nearby restaurant links, optional)</label>
+          <input type="text" id="ob-city" value="${esc(deliveryDraft.city)}" placeholder="e.g. bengaluru, mumbai, delhi-ncr" enterkeyhint="done">
+        </div>
+
+        ${
+          companionOn
+            ? `
+          <fieldset class="st-group">
+            <legend>Sign in &amp; permissions (Local Companion detected)</legend>
+            <p class="st-help">Grant OAuth 2.1 access to view saved addresses, search live local inventory, and build carts (real orders always ask for confirmation first).</p>
+            <div class="ob-oauth-row">
+              <button type="button" class="tbtn ${swiggyConnected ? "is-active" : ""}" id="ob-oauth-swiggy" ${swiggyConnected || authBusy ? "disabled" : ""}>
+                ${swiggyConnected ? "Swiggy Connected ✓" : "Sign in with Swiggy"}
+              </button>
+              <button type="button" class="tbtn ${zeptoConnected ? "is-active" : ""}" id="ob-oauth-zepto" ${zeptoConnected || authBusy ? "disabled" : ""}>
+                ${zeptoConnected ? "Zepto Connected ✓" : "Sign in with Zepto"}
+              </button>
+            </div>
+            ${authNote ? `<p class="st-help" role="status" aria-live="polite">${esc(authNote)}</p>` : ""}
+          </fieldset>
+        `
+            : `<p class="st-help">Smart ordering links work right away on GitHub Pages. Running Mise locally (<code>npm start</code>) also unlocks live Swiggy, Zepto &amp; Blinkit MCP carts in Settings.</p>`
+        }
 
         <div class="ob-foot">
           <button type="button" class="tbtn" id="ob-prev-btn">← Back</button>
           <div class="ob-foot-right">
-            <button type="button" class="quiet-act" id="ob-skip-ai-btn">Skip AI for now</button>
+            <button type="button" class="quiet-act" id="ob-skip-apps-btn">Skip apps for now</button>
             <button type="button" class="go ob-primary" id="ob-finish-btn">Start cooking</button>
           </div>
         </div>
@@ -409,12 +505,12 @@ export function renderOnboardingView(rootEl, ctx) {
   };
 
   const render = (focusHeading = false) => {
-    const pct = `${Math.round((step / 4) * 100)}%`;
+    const pct = `${Math.round((step / 5) * 100)}%`;
     rootEl.innerHTML = `
       <div class="ob-shell">
         <div class="ob-top">
           <div class="ob-progress-wrap">
-            <span class="ob-step-count">0${step} / 04</span>
+            <span class="ob-step-count">0${step} / 05</span>
             <div class="ob-progress" aria-hidden="true">
               <div class="ob-progress-fill" style="width: ${pct}"></div>
             </div>
@@ -430,7 +526,8 @@ export function renderOnboardingView(rootEl, ctx) {
 
     rootEl.querySelector("#ob-skip-btn")?.addEventListener("click", () => finish({ skipped: true }));
     rootEl.querySelector("#ob-skip-main-btn")?.addEventListener("click", () => finish({ skipped: true }));
-    rootEl.querySelector("#ob-skip-ai-btn")?.addEventListener("click", () => finish({ skipped: false }));
+    rootEl.querySelector("#ob-skip-ai-btn")?.addEventListener("click", () => goStep(5));
+    rootEl.querySelector("#ob-skip-apps-btn")?.addEventListener("click", () => finish({ skipped: false }));
     rootEl.querySelector("#ob-next-btn")?.addEventListener("click", () => goStep(step + 1));
     rootEl.querySelector("#ob-prev-btn")?.addEventListener("click", () => goStep(step - 1));
     rootEl.querySelector("#ob-finish-btn")?.addEventListener("click", () => finish({ skipped: false }));
@@ -551,6 +648,43 @@ export function renderOnboardingView(rootEl, ctx) {
           });
         });
       });
+    } else if (step === 5) {
+      rootEl.querySelectorAll('input[name="ob-gprov"]').forEach((r) => {
+        r.addEventListener("change", () => {
+          syncCurrentStepInputs();
+          deliveryDraft.preferredGrocery = r.value;
+          rootEl.querySelectorAll('input[name="ob-gprov"]').forEach((el) => {
+            el.nextElementSibling?.classList.toggle("is-selected", el.checked);
+          });
+        });
+      });
+      rootEl.querySelectorAll('input[name="ob-fprov"]').forEach((r) => {
+        r.addEventListener("change", () => {
+          syncCurrentStepInputs();
+          deliveryDraft.preferredFood = r.value;
+          rootEl.querySelectorAll('input[name="ob-fprov"]').forEach((el) => {
+            el.nextElementSibling?.classList.toggle("is-selected", el.checked);
+          });
+        });
+      });
+      for (const pid of ["swiggy", "zepto"]) {
+        rootEl.querySelector(`#ob-oauth-${pid}`)?.addEventListener("click", async () => {
+          syncCurrentStepInputs();
+          authBusy = true;
+          authNote = `Opening ${pid === "swiggy" ? "Swiggy" : "Zepto"} sign-in…`;
+          render(false);
+          try {
+            const nextStatus = await ctx.onStartMcpOAuth?.(pid, deliveryDraft);
+            if (nextStatus) mcpState = structuredClone(nextStatus);
+            authNote = `${pid === "swiggy" ? "Swiggy" : "Zepto"} connected.`;
+          } catch (err) {
+            authNote = err?.message || `Could not sign in to ${pid}.`;
+          } finally {
+            authBusy = false;
+            render(false);
+          }
+        });
+      }
     }
 
     if (focusHeading) {

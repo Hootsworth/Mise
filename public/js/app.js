@@ -37,6 +37,22 @@ import {
   resetOnboarding,
   renderOnboardingView
 } from "./onboarding.js";
+import {
+  createDefaultDeliveryPrefs,
+  loadDeliveryPrefs,
+  saveDeliveryPrefs,
+  extractMissingIngredients
+} from "./delivery-links.js";
+import {
+  isLocalhostRuntime,
+  fetchCompanionStatus,
+  startOAuthSignIn,
+  disconnectMcpProvider,
+  configureBlinkit,
+  blinkitSendPhone,
+  blinkitSubmitOtp
+} from "./mcp-client.js";
+import { OrderSheetController } from "./order-sheet.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) =>
@@ -158,6 +174,8 @@ const state = {
   hist: loadJson("mise:hist", []),
   saved: loadJson("mise:saved", []),
   profile: { ...DEFAULT_PROFILE, ...(loadJson("mise:profile", {}) || {}) },
+  deliveryPrefs: loadDeliveryPrefs(),
+  mcpStatus: { available: false, origin: "", providers: {} },
   ingIntelCache: new Map(),
   stepHelpCache: new Map(),
   activePopIngIdx: null,
@@ -168,6 +186,14 @@ state.unitSystem = state.profile.units === "us" ? "us" : "metric";
 
 const timerManager = new TimerManager();
 let cookMode = null;
+let orderSheet = null;
+
+async function refreshMcpStatus(prefsOverride = state.deliveryPrefs, { forceLocalProbe = false } = {}) {
+  const next = await fetchCompanionStatus(prefsOverride, { forceLocalProbe });
+  state.mcpStatus = next;
+  orderSheet?.refresh();
+  return next;
+}
 
 function activeRecipe() {
   return state.versions[state.versionIndex] || null;
@@ -1019,7 +1045,7 @@ function renderRecipe() {
               : ""
           }
           <button type="button" class="tbtn" id="copy-md-btn">Copy</button>
-          <button type="button" class="tbtn" id="copy-shop-btn">Groceries</button>
+          <button type="button" class="tbtn" id="order-recipe-btn">Order</button>
           <button type="button" class="tbtn" id="print-btn">Print</button>
         </div>
       </div>`;
@@ -1028,6 +1054,12 @@ function renderRecipe() {
     r.change_summary && !isStreaming
       ? `<p class="change-banner"><strong>Revised:</strong> ${esc(r.change_summary)}</p>`
       : "";
+
+  const missingCount = extractMissingIngredients(r, state.checkedIng, state.profile.pantry || "", {
+    autoMatchPantry: state.deliveryPrefs.autoMatchPantry,
+    servings: state.servings,
+    unitSystem: state.unitSystem
+  }).filter((row) => row.needed).length;
 
   $("#view").innerHTML = `
     ${toolbarHtml}
@@ -1077,6 +1109,16 @@ function renderRecipe() {
             ingHtml
               ? `<ul class="ing" id="ing">${ingHtml}</ul>`
               : `<div class="sk-lines"><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>`
+          }
+          ${
+            !isStreaming && (r.ingredients || []).length
+              ? `
+            <div class="ing-order-bar">
+              <button type="button" class="tbtn" id="ing-order-missing-btn">Order missing (${missingCount})</button>
+              <button type="button" class="quiet-act" id="ing-order-nearby-btn">Or order dish nearby →</button>
+            </div>
+          `
+              : ""
           }
         </section>
         <section>
@@ -1212,7 +1254,7 @@ function bindRecipeEvents() {
 
   $("#hero-refresh-btn", view)?.addEventListener("click", () => {
     const r = activeRecipe();
-    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true, useAi: state.aiImagesOptIn });
+    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true, useAi: state.aiSettings.imageMode === "ai" });
   });
 
   $("#hero-ai-btn", view)?.addEventListener("click", () => {
@@ -1222,17 +1264,28 @@ function bindRecipeEvents() {
 
   $("#gen-photo-btn", view)?.addEventListener("click", () => {
     const r = activeRecipe();
-    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true, useAi: state.aiImagesOptIn });
+    if (r) hydrateRecipeHeroImage(r, { forceRefresh: true, useAi: state.aiSettings.imageMode === "ai" });
   });
 
   $("#copy-md-btn", view)?.addEventListener("click", (e) => {
+    const btn = e.currentTarget;
     const md = formatRecipeMarkdown(activeRecipe());
-    navigator.clipboard?.writeText(md).then(() => flashFeedback(e.currentTarget, "Copied"));
+    navigator.clipboard?.writeText(md).then(() => flashFeedback(btn, "Copied"), () => {});
   });
 
-  $("#copy-shop-btn", view)?.addEventListener("click", (e) => {
-    const list = formatGroceryList(activeRecipe());
-    navigator.clipboard?.writeText(list).then(() => flashFeedback(e.currentTarget, "Copied"));
+  $("#order-recipe-btn", view)?.addEventListener("click", () => {
+    const r = activeRecipe();
+    if (r) orderSheet?.open(r, { tab: "groceries" });
+  });
+
+  $("#ing-order-missing-btn", view)?.addEventListener("click", () => {
+    const r = activeRecipe();
+    if (r) orderSheet?.open(r, { tab: "groceries" });
+  });
+
+  $("#ing-order-nearby-btn", view)?.addEventListener("click", () => {
+    const r = activeRecipe();
+    if (r) orderSheet?.open(r, { tab: "restaurants" });
   });
 
   $("#print-btn", view)?.addEventListener("click", () => window.print());
@@ -1270,6 +1323,17 @@ function bindRecipeEvents() {
       const isOn = state.checkedIng.has(idx);
       row?.classList.toggle("on", isOn);
       btn.setAttribute("aria-pressed", String(isOn));
+
+      const r = activeRecipe();
+      const missingBtn = $("#ing-order-missing-btn", view);
+      if (r && missingBtn) {
+        const count = extractMissingIngredients(r, state.checkedIng, state.profile.pantry || "", {
+          autoMatchPantry: state.deliveryPrefs.autoMatchPantry,
+          servings: state.servings,
+          unitSystem: state.unitSystem
+        }).filter((item) => item.needed).length;
+        missingBtn.textContent = `Order missing (${count})`;
+      }
     });
   });
 
@@ -1915,6 +1979,8 @@ function openSettings(tab = "ai") {
   renderSettingsView(root, {
     aiSettings: state.aiSettings,
     profile: state.profile,
+    deliveryPrefs: state.deliveryPrefs,
+    mcpStatus: state.mcpStatus,
     activeTab: state.settingsTab,
     histCount: state.hist.length,
     savedCount: state.saved.length,
@@ -1941,6 +2007,40 @@ function openSettings(tab = "ai") {
       if (state.view === "recipe") renderRecipe();
       return state.profile;
     },
+    onSaveDeliveryPrefs: (nextDelivery) => {
+      state.deliveryPrefs = saveDeliveryPrefs(nextDelivery);
+      orderSheet?.refresh();
+      return state.deliveryPrefs;
+    },
+    onRefreshMcpStatus: async (prefsOverride, opts) => {
+      const next = await refreshMcpStatus(prefsOverride || state.deliveryPrefs, opts);
+      return next;
+    },
+    onStartMcpOAuth: async (providerId, prefsOverride) => {
+      const { status } = await startOAuthSignIn(providerId, prefsOverride || state.deliveryPrefs);
+      state.mcpStatus = status;
+      orderSheet?.refresh();
+      return status;
+    },
+    onDisconnectMcp: async (providerId, prefsOverride) => {
+      await disconnectMcpProvider(providerId, prefsOverride || state.deliveryPrefs);
+      return await refreshMcpStatus(prefsOverride || state.deliveryPrefs);
+    },
+    onConfigureBlinkit: async (cfg, prefsOverride) => {
+      const res = await configureBlinkit(cfg, prefsOverride || state.deliveryPrefs);
+      const status = await refreshMcpStatus(prefsOverride || state.deliveryPrefs);
+      return { ...res, status };
+    },
+    onBlinkitLogin: async (phone, prefsOverride) => {
+      const res = await blinkitSendPhone(phone, prefsOverride || state.deliveryPrefs);
+      const status = await refreshMcpStatus(prefsOverride || state.deliveryPrefs);
+      return { ...res, status };
+    },
+    onBlinkitOtp: async (otp, prefsOverride) => {
+      const res = await blinkitSubmitOtp(otp, prefsOverride || state.deliveryPrefs);
+      const status = await refreshMcpStatus(prefsOverride || state.deliveryPrefs);
+      return { ...res, status };
+    },
     onClearKeys: () => {
       state.aiSettings = clearAllApiKeys(state.aiSettings);
       updateAiHeaderBadge();
@@ -1954,6 +2054,7 @@ function openSettings(tab = "ai") {
     onResetAll: () => {
       state.aiSettings = saveAiSettings(createDefaultAiSettings());
       state.profile = structuredClone(DEFAULT_PROFILE);
+      state.deliveryPrefs = saveDeliveryPrefs(createDefaultDeliveryPrefs());
       state.unitSystem = "metric";
       state.hist = [];
       state.saved = [];
@@ -1963,7 +2064,11 @@ function openSettings(tab = "ai") {
       updateAiHeaderBadge();
       updateKitchenDot();
       renderLibrary();
-      return { aiSettings: state.aiSettings, profile: state.profile };
+      return {
+        aiSettings: state.aiSettings,
+        profile: state.profile,
+        deliveryPrefs: state.deliveryPrefs
+      };
     },
     onFetchModels: (providerId, cfg, signal) => fetchProviderModels(providerId, cfg, { signal }),
     onTestConnection: (settings, signal) => testProviderConnection(settings, { signal }),
@@ -1982,10 +2087,21 @@ function openOnboarding() {
   renderOnboardingView(root, {
     aiSettings: state.aiSettings,
     profile: state.profile,
+    deliveryPrefs: state.deliveryPrefs,
+    mcpStatus: state.mcpStatus,
     onFetchModels: (providerId, cfg) => fetchProviderModels(providerId, cfg),
-    onComplete: ({ aiSettings, profile }) => {
+    onStartMcpOAuth: async (providerId, prefsOverride) => {
+      const { status } = await startOAuthSignIn(providerId, prefsOverride || state.deliveryPrefs);
+      state.mcpStatus = status;
+      orderSheet?.refresh();
+      return status;
+    },
+    onComplete: ({ aiSettings, profile, deliveryPrefs }) => {
       state.aiSettings = saveAiSettings(aiSettings);
       state.profile = structuredClone(profile);
+      if (deliveryPrefs) {
+        state.deliveryPrefs = saveDeliveryPrefs(deliveryPrefs);
+      }
       state.unitSystem = state.profile.units === "us" ? "us" : "metric";
       saveJson("mise:profile", state.profile);
       updateAiHeaderBadge();
@@ -2000,7 +2116,7 @@ function openOnboarding() {
 
 /* ---------------- Bootstrap & Event Wiring ---------------- */
 
-function init() {
+async function init() {
   initThemeToggle($("#theme-btn"));
 
   cookMode = new CookModeController($("#cook-dialog"), {
@@ -2018,6 +2134,23 @@ function init() {
       closeTopLayer($("#cook-dialog"));
       reviseRecipe(instruction);
     }
+  });
+
+  const orderDialog = $("#order-dialog");
+  setupModalDialog(orderDialog);
+  orderSheet = new OrderSheetController(orderDialog, {
+    getProfile: () => state.profile,
+    getServings: () => state.servings,
+    getUnitSystem: () => state.unitSystem,
+    getCheckedIngredients: () => state.checkedIng,
+    getDeliveryPrefs: () => state.deliveryPrefs,
+    getMcpStatus: () => state.mcpStatus,
+    onToggleIngredient: (idx) => {
+      if (state.checkedIng.has(idx)) state.checkedIng.delete(idx);
+      else state.checkedIng.add(idx);
+      if (state.view === "recipe") renderRecipe();
+    },
+    onOpenDeliverySettings: () => openSettings("delivery")
   });
 
   timerManager.subscribe((timers) => {
@@ -2195,6 +2328,10 @@ function init() {
   renderLibrary();
   updateKitchenDot();
   updateAiHeaderBadge();
+
+  if (isLocalhostRuntime() || state.deliveryPrefs.companionUrl) {
+    await refreshMcpStatus();
+  }
 
   const isFreshUser =
     !hasCompletedOnboarding() &&

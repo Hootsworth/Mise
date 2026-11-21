@@ -2,6 +2,7 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createMcpBridge } from "./mcp/bridge.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_DIR = path.join(__dirname, "public");
@@ -77,16 +78,28 @@ async function serveStatic(res, publicDir, pathname, method) {
 }
 
 /**
- * Creates a clean static HTTP file server for the `public/` directory.
+ * Creates the static HTTP file server and Local MCP Companion bridge for Mise.
  */
-export function createServer({ publicDir = DEFAULT_PUBLIC_DIR } = {}) {
-  return http.createServer(async (req, res) => {
+export function createServer({ publicDir = DEFAULT_PUBLIC_DIR, mcpStatePath, mcpOptions = {} } = {}) {
+  const mcpBridge = createMcpBridge({ statePath: mcpStatePath, ...mcpOptions });
+
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
+    if (url.pathname.startsWith("/api/mcp/") || mcpBridge.canHandleCallback(url)) {
+      const handled = await mcpBridge.handleRequest(req, res, url);
+      if (handled) return;
+    }
     if (req.method === "GET" || req.method === "HEAD") {
       return await serveStatic(res, publicDir, url.pathname, req.method);
     }
     return sendJson(res, 405, { error: "Method not allowed." });
   });
+
+  server.on("close", () => {
+    mcpBridge.close().catch(() => {});
+  });
+
+  return server;
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -94,6 +107,6 @@ if (isMain) {
   const port = Number(process.env.PORT) || 3456;
   const server = createServer();
   server.listen(port, "127.0.0.1", () => {
-    console.log(`Mise running at http://127.0.0.1:${port}`);
+    console.log(`Mise running at http://localhost:${port} (http://127.0.0.1:${port}) · Local MCP Companion active`);
   });
 }

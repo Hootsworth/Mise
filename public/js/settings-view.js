@@ -4,6 +4,11 @@ import {
   getProviderConfig,
   isProviderReady
 } from "./ai-client.js";
+import {
+  GROCERY_PLATFORMS,
+  FOOD_PLATFORMS,
+  createDefaultDeliveryPrefs
+} from "./delivery-links.js";
 
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({
@@ -69,6 +74,16 @@ export function renderSettingsView(rootEl, ctx) {
 
   const aiDraft = structuredClone(ctx.aiSettings);
   const kpDraft = structuredClone(ctx.profile || DEFAULT_PROFILE);
+  const deliveryDraft = structuredClone(ctx.deliveryPrefs || createDefaultDeliveryPrefs());
+  let mcpState = structuredClone(ctx.mcpStatus || { available: false, origin: "", providers: {} });
+  let blinkitMode = mcpState.providers?.blinkit?.mode || "stdio";
+  let blinkitRepoPath = mcpState.providers?.blinkit?.repoPath || "";
+  let blinkitSseUrl = mcpState.providers?.blinkit?.sseUrl || "http://127.0.0.1:8000/sse";
+  let blinkitPhone = "";
+  let blinkitOtp = "";
+  let blinkitAwaitingOtp = false;
+  let mcpBusy = false;
+
   let activeTab = ctx.activeTab || "ai";
   let showKey = false;
   let fetchedModels = {}; // providerId -> string[]
@@ -496,11 +511,241 @@ export function renderSettingsView(rootEl, ctx) {
     `;
   };
 
+  const formatExpiry = (ms) => {
+    if (!ms) return "";
+    try {
+      return `Valid until ${new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+    } catch {
+      return "";
+    }
+  };
+
+  const renderDeliveryTab = () => {
+    const companionOn = Boolean(mcpState?.available);
+    const swiggy = mcpState?.providers?.swiggy || {};
+    const zepto = mcpState?.providers?.zepto || {};
+    const blinkit = mcpState?.providers?.blinkit || {};
+    const swiggyPerms = [
+      ...(GROCERY_PLATFORMS.find((p) => p.id === "swiggy-im")?.permissions || []),
+      "Browse nearby Swiggy Food restaurants & menus"
+    ];
+    const zeptoPerms = GROCERY_PLATFORMS.find((p) => p.id === "zepto")?.permissions || [];
+    const blinkitPerms = GROCERY_PLATFORMS.find((p) => p.id === "blinkit")?.permissions || [];
+    const zomatoPerms = FOOD_PLATFORMS.find((p) => p.id === "zomato")?.permissions || [];
+
+    return `
+      <div class="st-delivery">
+        <fieldset class="st-group">
+          <legend>Local MCP Companion</legend>
+          <div class="mcp-companion-head">
+            <span class="mcp-badge ${companionOn ? "is-on" : ""}">
+              <span class="mcp-dot ${companionOn ? "is-on" : ""}" aria-hidden="true"></span>
+              ${companionOn ? `Companion connected (${esc(mcpState.origin || "localhost")})` : "Static web mode (Deep-links active)"}
+            </span>
+          </div>
+          <div class="st-field">
+            <label for="st-mcp-url">Companion URL (optional when on localhost)</label>
+            <div class="st-input-row">
+              <input
+                type="url"
+                id="st-mcp-url"
+                value="${esc(deliveryDraft.companionUrl)}"
+                placeholder="http://localhost:3456"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+              >
+              <button type="button" class="tbtn" id="st-mcp-check" ${mcpBusy ? "disabled" : ""}>Check connection</button>
+            </div>
+          </div>
+          <p class="st-help">
+            Run <code>npm start</code> locally to unlock OAuth 2.1 sign-in for Swiggy &amp; Zepto and local Blinkit MCP bridging. On static GitHub Pages without a companion process, Mise opens one-click search deep-links directly.
+          </p>
+        </fieldset>
+
+        <fieldset class="st-group">
+          <legend>Connected Accounts &amp; Permissions</legend>
+          <div class="mcp-app-grid">
+            <article class="mcp-app-card">
+              <div class="mcp-app-top">
+                <div>
+                  <strong>Swiggy (Instamart &amp; Food)</strong>
+                  <small>Official MCP · OAuth 2.1 + PKCE</small>
+                </div>
+                <span class="mcp-badge ${swiggy.connected ? "is-on" : ""}">${swiggy.connected ? "Connected" : "Signed out"}</span>
+              </div>
+              <ul class="mcp-perm-list">
+                ${swiggyPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
+              </ul>
+              <div class="mcp-app-foot">
+                <small class="mcp-meta">${swiggy.connected ? esc(formatExpiry(swiggy.expiresAt) || "Active session") : "Phone + OTP in Swiggy popup"}</small>
+                <div class="mcp-card-acts">
+                  ${
+                    swiggy.connected
+                      ? `<button type="button" class="tbtn" data-mcp-disc="swiggy" ${mcpBusy ? "disabled" : ""}>Disconnect</button>`
+                      : `<button type="button" class="go" id="st-oauth-swiggy" ${!companionOn || mcpBusy ? "disabled" : ""}>Sign in with Swiggy</button>`
+                  }
+                </div>
+              </div>
+            </article>
+
+            <article class="mcp-app-card">
+              <div class="mcp-app-top">
+                <div>
+                  <strong>Zepto</strong>
+                  <small>Official MCP · OAuth 2.1 + PKCE</small>
+                </div>
+                <span class="mcp-badge ${zepto.connected ? "is-on" : ""}">${zepto.connected ? "Connected" : "Signed out"}</span>
+              </div>
+              <ul class="mcp-perm-list">
+                ${zeptoPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
+              </ul>
+              <div class="mcp-app-foot">
+                <small class="mcp-meta">${zepto.connected ? esc(formatExpiry(zepto.expiresAt) || "Active session") : "Uses whitelisted localhost /callback"}</small>
+                <div class="mcp-card-acts">
+                  ${
+                    zepto.connected
+                      ? `<button type="button" class="tbtn" data-mcp-disc="zepto" ${mcpBusy ? "disabled" : ""}>Disconnect</button>`
+                      : `<button type="button" class="go" id="st-oauth-zepto" ${!companionOn || mcpBusy ? "disabled" : ""}>Sign in with Zepto</button>`
+                  }
+                </div>
+              </div>
+            </article>
+
+            <article class="mcp-app-card">
+              <div class="mcp-app-top">
+                <div>
+                  <strong>Blinkit (Unofficial MCP)</strong>
+                  <small>hereisSwapnil/blinkit-mcp · Local Python Playwright</small>
+                </div>
+                <span class="mcp-badge ${blinkit.connected && blinkit.loggedIn ? "is-on" : ""}">
+                  ${blinkit.connected ? (blinkit.loggedIn ? "Signed in" : "Connected · Login needed") : "Not connected"}
+                </span>
+              </div>
+              <ul class="mcp-perm-list">
+                ${blinkitPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
+              </ul>
+              <div class="mcp-blinkit-cfg">
+                <div class="field-split">
+                  <div class="st-field">
+                    <label for="st-blinkit-mode">Transport</label>
+                    <select class="m3-select" id="st-blinkit-mode">
+                      <option value="stdio" ${blinkitMode === "stdio" ? "selected" : ""}>Local stdio (uv run main.py)</option>
+                      <option value="sse" ${blinkitMode === "sse" ? "selected" : ""}>Local SSE (:8000/sse)</option>
+                    </select>
+                  </div>
+                  ${
+                    blinkitMode === "sse"
+                      ? `
+                    <div class="st-field">
+                      <label for="st-blinkit-sse">Blinkit SSE URL</label>
+                      <input type="url" id="st-blinkit-sse" value="${esc(blinkitSseUrl)}" placeholder="http://127.0.0.1:8000/sse">
+                    </div>
+                  `
+                      : `
+                    <div class="st-field">
+                      <label for="st-blinkit-repo">Cloned blinkit-mcp folder path</label>
+                      <input type="text" id="st-blinkit-repo" value="${esc(blinkitRepoPath)}" placeholder="/Users/.../blinkit-mcp">
+                    </div>
+                  `
+                  }
+                </div>
+                ${
+                  blinkit.connected && !blinkit.loggedIn
+                    ? `
+                  <div class="mcp-otp-row">
+                    <input type="tel" id="st-blinkit-phone" value="${esc(blinkitPhone)}" placeholder="10-digit mobile number" aria-label="Blinkit mobile number">
+                    <button type="button" class="tbtn" id="st-blinkit-send-otp" ${mcpBusy ? "disabled" : ""}>Send OTP</button>
+                    ${
+                      blinkitAwaitingOtp
+                        ? `
+                      <input type="text" id="st-blinkit-otp" value="${esc(blinkitOtp)}" placeholder="Enter OTP" aria-label="Blinkit OTP">
+                      <button type="button" class="go" id="st-blinkit-verify-otp" ${mcpBusy ? "disabled" : ""}>Verify OTP</button>
+                    `
+                        : ""
+                    }
+                  </div>
+                `
+                    : ""
+                }
+              </div>
+              <div class="mcp-app-foot">
+                <small class="mcp-meta">Session stored locally in <code>~/.blinkit_mcp</code></small>
+                <div class="mcp-card-acts">
+                  ${
+                    blinkit.connected
+                      ? `<button type="button" class="tbtn" data-mcp-disc="blinkit" ${mcpBusy ? "disabled" : ""}>Disconnect</button>`
+                      : ""
+                  }
+                  <button type="button" class="go" id="st-blinkit-connect" ${!companionOn || mcpBusy ? "disabled" : ""}>${blinkit.connected ? "Reconnect" : "Connect Blinkit"}</button>
+                </div>
+              </div>
+            </article>
+
+            <article class="mcp-app-card">
+              <div class="mcp-app-top">
+                <div>
+                  <strong>Zomato</strong>
+                  <small>Nearby Restaurants · Smart Deep-Link</small>
+                </div>
+                <span class="mcp-badge">Deep-Link Ready</span>
+              </div>
+              <ul class="mcp-perm-list">
+                ${zomatoPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
+              </ul>
+              <div class="mcp-app-foot">
+                <small class="mcp-meta">Works directly on GitHub Pages without OAuth</small>
+                <a class="tbtn" href="https://mcpservers.org/servers/zomato-mcp" target="_blank" rel="noopener noreferrer">View docs ↗</a>
+              </div>
+            </article>
+          </div>
+        </fieldset>
+
+        <form id="st-delivery-form" aria-labelledby="settings-heading" novalidate>
+          <fieldset class="st-group">
+            <legend>Ordering Defaults</legend>
+            <div class="field-split">
+              <div class="st-field">
+                <label for="st-del-g">Default grocery app</label>
+                <select class="m3-select" id="st-del-g" name="preferredGrocery">
+                  ${GROCERY_PLATFORMS.map(
+                    (p) => `<option value="${esc(p.id)}" ${deliveryDraft.preferredGrocery === p.id ? "selected" : ""}>${esc(p.label)}</option>`
+                  ).join("")}
+                </select>
+              </div>
+              <div class="st-field">
+                <label for="st-del-f">Default restaurant app</label>
+                <select class="m3-select" id="st-del-f" name="preferredFood">
+                  ${FOOD_PLATFORMS.map(
+                    (p) => `<option value="${esc(p.id)}" ${deliveryDraft.preferredFood === p.id ? "selected" : ""}>${esc(p.label)}</option>`
+                  ).join("")}
+                </select>
+              </div>
+              <div class="st-field">
+                <label for="st-del-city">City (for Zomato links)</label>
+                <input type="text" id="st-del-city" value="${esc(deliveryDraft.city)}" placeholder="e.g. bengaluru, mumbai">
+              </div>
+            </div>
+            <div class="st-field">
+              <button type="button" class="chip m3-check-chip ${deliveryDraft.autoMatchPantry ? "is-active" : ""}" id="st-del-pantry" aria-pressed="${deliveryDraft.autoMatchPantry}">Auto-skip Kitchen Profile pantry staples</button>
+            </div>
+          </fieldset>
+
+          <div class="st-actions">
+            <button type="submit" class="go" id="st-save-delivery">Save delivery preferences</button>
+          </div>
+          <div id="st-status" class="st-status ${statusMsg.isError ? "is-error" : ""}" role="status" aria-live="polite">${esc(statusMsg.text)}</div>
+        </form>
+      </div>
+    `;
+  };
+
   const render = () => {
     const tabs = [
       { id: "ai", label: "AI & Models" },
       { id: "photo", label: "Photography" },
       { id: "kitchen", label: "Kitchen Profile" },
+      { id: "delivery", label: "Delivery & MCP" },
       { id: "data", label: "Data" }
     ];
 
@@ -508,6 +753,7 @@ export function renderSettingsView(rootEl, ctx) {
     if (activeTab === "ai") tabHtml = renderAiTab();
     else if (activeTab === "photo") tabHtml = renderPhotographyTab();
     else if (activeTab === "kitchen") tabHtml = renderKitchenTab();
+    else if (activeTab === "delivery") tabHtml = renderDeliveryTab();
     else tabHtml = renderDataTab();
 
     rootEl.innerHTML = `
@@ -552,6 +798,7 @@ export function renderSettingsView(rootEl, ctx) {
     if (activeTab === "ai") bindAiTab();
     else if (activeTab === "photo") bindPhotoTab();
     else if (activeTab === "kitchen") bindKitchenTab();
+    else if (activeTab === "delivery") bindDeliveryTab();
     else bindDataTab();
   };
 
@@ -803,6 +1050,183 @@ export function renderSettingsView(rootEl, ctx) {
     });
   };
 
+  const bindDeliveryTab = () => {
+    const syncDeliveryInputs = () => {
+      const mcpUrlEl = rootEl.querySelector("#st-mcp-url");
+      const gEl = rootEl.querySelector("#st-del-g");
+      const fEl = rootEl.querySelector("#st-del-f");
+      const cityEl = rootEl.querySelector("#st-del-city");
+      const repoEl = rootEl.querySelector("#st-blinkit-repo");
+      const sseEl = rootEl.querySelector("#st-blinkit-sse");
+      const phoneEl = rootEl.querySelector("#st-blinkit-phone");
+      const otpEl = rootEl.querySelector("#st-blinkit-otp");
+      if (mcpUrlEl) deliveryDraft.companionUrl = mcpUrlEl.value.trim().replace(/\/+$/, "");
+      if (gEl) deliveryDraft.preferredGrocery = gEl.value;
+      if (fEl) deliveryDraft.preferredFood = fEl.value;
+      if (cityEl) deliveryDraft.city = cityEl.value.trim();
+      if (repoEl) blinkitRepoPath = repoEl.value.trim();
+      if (sseEl) blinkitSseUrl = sseEl.value.trim();
+      if (phoneEl) blinkitPhone = phoneEl.value.trim();
+      if (otpEl) blinkitOtp = otpEl.value.trim();
+    };
+
+    rootEl.querySelector("#st-mcp-check")?.addEventListener("click", async () => {
+      syncDeliveryInputs();
+      ctx.onSaveDeliveryPrefs?.(deliveryDraft);
+      mcpBusy = true;
+      setStatus("Checking Local MCP Companion…");
+      render();
+      try {
+        const res = await ctx.onRefreshMcpStatus?.(deliveryDraft, { forceLocalProbe: true });
+        if (res) mcpState = structuredClone(res);
+        statusMsg = mcpState.available
+          ? { text: `Companion online at ${mcpState.origin}.`, isError: false }
+          : { text: mcpState.error || "Companion not reachable locally — web deep-links active.", isError: false };
+      } catch (err) {
+        statusMsg = { text: err?.message || "Companion check failed.", isError: true };
+      } finally {
+        mcpBusy = false;
+        render();
+      }
+    });
+
+    for (const pid of ["swiggy", "zepto"]) {
+      rootEl.querySelector(`#st-oauth-${pid}`)?.addEventListener("click", async () => {
+        syncDeliveryInputs();
+        mcpBusy = true;
+        statusMsg = { text: `Opening ${pid === "swiggy" ? "Swiggy" : "Zepto"} OAuth sign-in popup…`, isError: false };
+        render();
+        try {
+          const nextStatus = await ctx.onStartMcpOAuth?.(pid, deliveryDraft);
+          if (nextStatus) mcpState = structuredClone(nextStatus);
+          statusMsg = {
+            text: `${pid === "swiggy" ? "Swiggy (Instamart & Food)" : "Zepto"} signed in successfully.`,
+            isError: false
+          };
+        } catch (err) {
+          statusMsg = { text: err?.message || `Could not sign in to ${pid}.`, isError: true };
+        } finally {
+          mcpBusy = false;
+          render();
+        }
+      });
+    }
+
+    rootEl.querySelectorAll("[data-mcp-disc]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const pid = btn.dataset.mcpDisc;
+        mcpBusy = true;
+        render();
+        try {
+          const nextStatus = await ctx.onDisconnectMcp?.(pid, deliveryDraft);
+          if (nextStatus) mcpState = structuredClone(nextStatus);
+          if (pid === "blinkit") blinkitAwaitingOtp = false;
+          statusMsg = { text: `Disconnected ${pid}.`, isError: false };
+        } catch (err) {
+          statusMsg = { text: err?.message || `Could not disconnect ${pid}.`, isError: true };
+        } finally {
+          mcpBusy = false;
+          render();
+        }
+      });
+    });
+
+    rootEl.querySelector("#st-blinkit-mode")?.addEventListener("change", (e) => {
+      syncDeliveryInputs();
+      blinkitMode = e.target.value === "sse" ? "sse" : "stdio";
+      render();
+    });
+
+    rootEl.querySelector("#st-blinkit-connect")?.addEventListener("click", async () => {
+      syncDeliveryInputs();
+      mcpBusy = true;
+      statusMsg = { text: "Connecting to Blinkit MCP…", isError: false };
+      render();
+      try {
+        const res = await ctx.onConfigureBlinkit?.(
+          { mode: blinkitMode, repoPath: blinkitRepoPath, sseUrl: blinkitSseUrl },
+          deliveryDraft
+        );
+        if (res?.status) mcpState = structuredClone(res.status);
+        statusMsg = {
+          text: res?.loggedIn
+            ? "Blinkit connected & logged in."
+            : "Blinkit connected — enter your mobile number below to verify with OTP.",
+          isError: false
+        };
+      } catch (err) {
+        statusMsg = { text: err?.message || "Could not connect to Blinkit MCP.", isError: true };
+      } finally {
+        mcpBusy = false;
+        render();
+      }
+    });
+
+    rootEl.querySelector("#st-blinkit-send-otp")?.addEventListener("click", async () => {
+      syncDeliveryInputs();
+      if (!blinkitPhone) {
+        setStatus("Enter your 10-digit mobile number for Blinkit OTP.", true);
+        return;
+      }
+      mcpBusy = true;
+      render();
+      try {
+        const res = await ctx.onBlinkitLogin?.(blinkitPhone, deliveryDraft);
+        if (res?.status) mcpState = structuredClone(res.status);
+        blinkitAwaitingOtp = !res?.alreadyLogged;
+        statusMsg = {
+          text: res?.alreadyLogged ? "Blinkit session already logged in." : res?.message || "OTP sent to your phone.",
+          isError: false
+        };
+      } catch (err) {
+        statusMsg = { text: err?.message || "Failed to initiate Blinkit login.", isError: true };
+      } finally {
+        mcpBusy = false;
+        render();
+      }
+    });
+
+    rootEl.querySelector("#st-blinkit-verify-otp")?.addEventListener("click", async () => {
+      syncDeliveryInputs();
+      if (!blinkitOtp) {
+        setStatus("Enter the OTP code.", true);
+        return;
+      }
+      mcpBusy = true;
+      render();
+      try {
+        const res = await ctx.onBlinkitOtp?.(blinkitOtp, deliveryDraft);
+        if (res?.status) mcpState = structuredClone(res.status);
+        if (res?.loggedIn) blinkitAwaitingOtp = false;
+        statusMsg = {
+          text: res?.loggedIn ? "Blinkit signed in successfully." : res?.message || "Verification checked.",
+          isError: !res?.loggedIn
+        };
+      } catch (err) {
+        statusMsg = { text: err?.message || "OTP verification failed.", isError: true };
+      } finally {
+        mcpBusy = false;
+        render();
+      }
+    });
+
+    rootEl.querySelector("#st-del-pantry")?.addEventListener("click", () => {
+      syncDeliveryInputs();
+      deliveryDraft.autoMatchPantry = !deliveryDraft.autoMatchPantry;
+      statusMsg = { text: "", isError: false };
+      render();
+    });
+
+    rootEl.querySelector("#st-delivery-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      syncDeliveryInputs();
+      const saved = ctx.onSaveDeliveryPrefs?.(deliveryDraft);
+      if (saved) Object.assign(deliveryDraft, structuredClone(saved));
+      statusMsg = { text: "Delivery preferences saved.", isError: false };
+      render();
+    });
+  };
+
   const bindDataTab = () => {
     rootEl.querySelector("#st-replay-onboarding")?.addEventListener("click", () => {
       ctx.onReplayOnboarding?.();
@@ -837,6 +1261,9 @@ export function renderSettingsView(rootEl, ctx) {
           const updated = ctx.onResetAll();
           Object.assign(aiDraft, structuredClone(updated.aiSettings));
           Object.assign(kpDraft, structuredClone(updated.profile));
+          if (updated.deliveryPrefs) {
+            Object.assign(deliveryDraft, structuredClone(updated.deliveryPrefs));
+          }
           ctx.histCount = 0;
           ctx.savedCount = 0;
           statusMsg = { text: "All settings and local data reset.", isError: false };
