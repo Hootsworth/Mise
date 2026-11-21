@@ -113,6 +113,7 @@ const DEFAULT_PROFILE = {
 
 const FALLBACK_PROVIDERS = [
   { id: "gemini", label: "Google Gemini", configured: false, supportsImages: true },
+  { id: "meta", label: "Meta AI", configured: false, supportsImages: true },
   { id: "openai", label: "OpenAI", configured: false, supportsImages: true },
   { id: "claude", label: "Anthropic Claude", configured: false, supportsImages: false },
   { id: "openrouter", label: "OpenRouter", configured: false, supportsImages: true },

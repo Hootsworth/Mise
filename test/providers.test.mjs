@@ -221,3 +221,61 @@ test("extractJsonObject extracts JSON cleanly from fenced or prose-wrapped outpu
   const balanced = extractJsonObject('Note {"a":{"b":"}"},"title":"Test"} trailing');
   assert.deepEqual(balanced, { a: { b: "}" }, title: "Test" });
 });
+
+test("Meta Model API supports META_API_KEY / MODEL_API_KEY, developer role, vision, streaming, and muse-image-1.0", () => {
+  const catalog = getPublicProviderCatalog({
+    MODEL_API_KEY: "LLM_meta_secret",
+    META_MODEL: "muse-wonder-1.0"
+  });
+  assert.equal(catalog.defaultProvider, "meta");
+  const metaPub = catalog.providers.find((p) => p.id === "meta");
+  assert.equal(metaPub.configured, true);
+  assert.equal(metaPub.supportsImages, true);
+  assert.equal(JSON.stringify(catalog).includes("LLM_meta_secret"), false);
+  assert.equal(JSON.stringify(catalog).includes("muse-wonder-1.0"), false);
+
+  const creds = resolveCredentials(
+    { provider: "meta" },
+    { MODEL_API_KEY: "LLM_meta_secret", META_MODEL: "muse-wonder-1.0" }
+  );
+  assert.equal(creds.apiKey, "LLM_meta_secret");
+  assert.equal(creds.model, "muse-wonder-1.0");
+  assert.equal(creds.baseUrl, "https://api.meta.ai/v1");
+
+  const req = buildProviderRequest({
+    ...creds,
+    system: "SYS",
+    userText: "Cook",
+    images: SAMPLE_IMG,
+    stream: true,
+    jsonMode: true
+  });
+  assert.equal(req.url, "https://api.meta.ai/v1/chat/completions");
+  assert.equal(req.headers.Authorization, "Bearer LLM_meta_secret");
+  assert.equal(req.body.messages[0].role, "developer");
+  assert.equal(req.body.messages[1].content[1].image_url.url, "data:image/jpeg;base64,QUJD");
+  assert.equal(req.body.response_format.type, "json_object");
+
+  assert.equal(
+    parseProviderChunk("meta", 'data: {"choices":[{"delta":{"content":"Miso"}}]}').text,
+    "Miso"
+  );
+  assert.equal(parseProviderChunk("meta", "data: [DONE]").done, true);
+
+  const imgTarget = resolveImageProvider("meta", { MODEL_API_KEY: "LLM_meta_secret" });
+  assert.equal(imgTarget.provider, "meta");
+  assert.equal(imgTarget.model, "muse-image-1.0");
+
+  const imgReq = buildImageRequest({
+    ...imgTarget,
+    prompt: "Charred cabbage"
+  });
+  assert.equal(imgReq.url, "https://api.meta.ai/v1/images/generations");
+  assert.equal(imgReq.body.model, "muse-image-1.0");
+  assert.equal(imgReq.body.size, "1792x1024");
+  assert.equal(imgReq.body.response_format, "b64_json");
+  assert.equal(
+    parseImageResponse("meta", { data: [{ b64_json: "QUJD" }] }),
+    "data:image/png;base64,QUJD"
+  );
+});

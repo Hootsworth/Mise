@@ -18,11 +18,15 @@ All API keys and model selections live strictly on the server (via environment v
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `DEFAULT_PROVIDER` | Preferred initial provider (`gemini`, `openai`, `claude`, `openrouter`, `ollama`) | First configured provider |
-| `IMAGE_PROVIDER` | Dish image backend (`auto`, `gemini`, `openai`, `openrouter`, `wikimedia`, `off`) | `auto` |
+| `DEFAULT_PROVIDER` | Preferred initial provider (`gemini`, `meta`, `openai`, `claude`, `openrouter`, `ollama`) | First configured provider |
+| `IMAGE_PROVIDER` | Dish image backend (`auto`, `gemini`, `meta`, `openai`, `openrouter`, `wikimedia`, `off`) | `auto` |
 | `GEMINI_API_KEY` | Google Gemini API key | — |
 | `GEMINI_MODEL` | Gemini text/vision model | `gemini-2.5-flash` |
 | `GEMINI_IMAGE_MODEL` | Gemini image generation model | `gemini-2.5-flash-image` |
+| `META_API_KEY` | Meta Model API key (`MODEL_API_KEY` also accepted) | — |
+| `META_MODEL` | Meta text/vision model | `muse-spark-1.3` |
+| `META_IMAGE_MODEL` | Meta image generation model | `muse-image-1.0` |
+| `META_BASE_URL` | Optional Meta Model API base URL | `https://api.meta.ai/v1` |
 | `OPENAI_API_KEY` | OpenAI API key | — |
 | `OPENAI_MODEL` | OpenAI text/vision model | `gpt-4.1-mini` |
 | `OPENAI_IMAGE_MODEL` | OpenAI image generation model | `gpt-image-1` |

@@ -10,6 +10,15 @@ export const PROVIDER_DEFAULTS = {
     envModel: "GEMINI_MODEL",
     envImageModel: "GEMINI_IMAGE_MODEL"
   },
+  meta: {
+    label: "Meta AI",
+    defaultModel: "muse-spark-1.3",
+    imageModel: "muse-image-1.0",
+    envKey: "META_API_KEY",
+    altEnvKey: "MODEL_API_KEY",
+    envModel: "META_MODEL",
+    envImageModel: "META_IMAGE_MODEL"
+  },
   openai: {
     label: "OpenAI",
     defaultModel: "gpt-4.1-mini",
@@ -75,6 +84,14 @@ export function validateOllamaHost(rawHost, env = process.env) {
   return normalized;
 }
 
+export function resolveMetaBaseUrl(env = process.env) {
+  return String(env.META_BASE_URL || "https://api.meta.ai/v1").trim().replace(/\/+$/, "");
+}
+
+function readProviderApiKey(meta, env = process.env) {
+  return String(env[meta.envKey] || (meta.altEnvKey ? env[meta.altEnvKey] : "") || "").trim();
+}
+
 /**
  * Resolves provider credentials strictly from server environment variables / GitHub Secrets.
  * Any client-supplied key, model, or host is ignored.
@@ -84,7 +101,7 @@ export function resolveCredentials({ provider } = {}, env = process.env) {
   const key = String(provider || catalog.defaultProvider || "gemini").toLowerCase().trim();
   const meta = PROVIDER_DEFAULTS[key];
   if (!meta) {
-    throw makeHttpError(400, `Unsupported provider "${provider}". Choose gemini, openai, claude, openrouter, or ollama.`);
+    throw makeHttpError(400, `Unsupported provider "${provider}". Choose gemini, meta, openai, claude, openrouter, or ollama.`);
   }
 
   const chosenModel = String(env[meta.envModel] || "").trim() || meta.defaultModel;
@@ -98,11 +115,12 @@ export function resolveCredentials({ provider } = {}, env = process.env) {
       provider: key,
       apiKey: "",
       model: chosenModel,
-      ollamaHost: validateOllamaHost(env.OLLAMA_HOST, env)
+      ollamaHost: validateOllamaHost(env.OLLAMA_HOST, env),
+      baseUrl: ""
     };
   }
 
-  const resolvedKey = String(env[meta.envKey] || "").trim();
+  const resolvedKey = readProviderApiKey(meta, env);
   if (!resolvedKey) {
     throw makeHttpError(
       400,
@@ -114,7 +132,8 @@ export function resolveCredentials({ provider } = {}, env = process.env) {
     provider: key,
     apiKey: resolvedKey,
     model: chosenModel,
-    ollamaHost: ""
+    ollamaHost: "",
+    baseUrl: key === "meta" ? resolveMetaBaseUrl(env) : ""
   };
 }
 
@@ -126,27 +145,32 @@ export function resolveImageProvider(preferredProvider, env = process.env) {
   if (mode === "off") return null;
 
   if (mode === "wikimedia") {
-    return { provider: "wikimedia", apiKey: "", model: "" };
+    return { provider: "wikimedia", apiKey: "", model: "", baseUrl: "" };
   }
 
   const checkAiProvider = (id) => {
     const meta = PROVIDER_DEFAULTS[id];
     if (!meta || !meta.imageModel) return null;
-    const key = String(env[meta.envKey] || "").trim();
+    const key = readProviderApiKey(meta, env);
     if (!key) return null;
     const model = String(env[meta.envImageModel] || "").trim() || meta.imageModel;
-    return { provider: id, apiKey: key, model };
+    return {
+      provider: id,
+      apiKey: key,
+      model,
+      baseUrl: id === "meta" ? resolveMetaBaseUrl(env) : ""
+    };
   };
 
-  if (mode === "gemini" || mode === "openai" || mode === "openrouter") {
+  if (mode === "gemini" || mode === "meta" || mode === "openai" || mode === "openrouter") {
     return checkAiProvider(mode);
   }
 
   // auto mode: prefer active text provider if it supports images, then fall back across configured providers
   const pref = String(preferredProvider || "").toLowerCase().trim();
   const order = [];
-  if (pref && ["gemini", "openai", "openrouter"].includes(pref)) order.push(pref);
-  for (const id of ["gemini", "openai", "openrouter"]) {
+  if (pref && ["gemini", "meta", "openai", "openrouter"].includes(pref)) order.push(pref);
+  for (const id of ["gemini", "openai", "meta", "openrouter"]) {
     if (!order.includes(id)) order.push(id);
   }
   for (const id of order) {
@@ -154,7 +178,7 @@ export function resolveImageProvider(preferredProvider, env = process.env) {
     if (resolved) return resolved;
   }
 
-  return { provider: "wikimedia", apiKey: "", model: "" };
+  return { provider: "wikimedia", apiKey: "", model: "", baseUrl: "" };
 }
 
 /**
@@ -195,6 +219,7 @@ export function buildProviderRequest({
   apiKey,
   model,
   ollamaHost,
+  baseUrl,
   system,
   userText,
   images = [],
@@ -202,6 +227,36 @@ export function buildProviderRequest({
   jsonMode = true
 }, env = process.env) {
   const imgs = normalizeImages(images);
+
+  if (provider === "meta") {
+    const endpoint = `${(baseUrl || resolveMetaBaseUrl(env)).replace(/\/+$/, "")}/chat/completions`;
+    const userContent = imgs.length
+      ? [
+          { type: "text", text: userText },
+          ...imgs.map((img) => ({ type: "image_url", image_url: { url: img.dataUrl } }))
+        ]
+      : userText;
+
+    const body = {
+      model,
+      stream: Boolean(stream),
+      temperature: 0.7,
+      messages: [
+        { role: "developer", content: system },
+        { role: "user", content: userContent }
+      ]
+    };
+    if (jsonMode) body.response_format = { type: "json_object" };
+
+    return {
+      url: endpoint,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body
+    };
+  }
 
   if (provider === "gemini") {
     const action = stream ? "streamGenerateContent?alt=sse" : "generateContent";
@@ -345,9 +400,9 @@ export function buildProviderRequest({
 }
 
 /**
- * Builds the HTTP request descriptor for AI image generation (`gemini`, `openai`, `openrouter`).
+ * Builds the HTTP request descriptor for AI image generation (`gemini`, `meta`, `openai`, `openrouter`).
  */
-export function buildImageRequest({ provider, apiKey, model, prompt }) {
+export function buildImageRequest({ provider, apiKey, model, prompt, baseUrl }) {
   if (provider === "gemini") {
     return {
       url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
@@ -360,6 +415,24 @@ export function buildImageRequest({ provider, apiKey, model, prompt }) {
         generationConfig: {
           responseModalities: ["TEXT", "IMAGE"]
         }
+      }
+    };
+  }
+
+  if (provider === "meta") {
+    const root = (baseUrl || "https://api.meta.ai/v1").replace(/\/+$/, "");
+    return {
+      url: `${root}/images/generations`,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: {
+        model,
+        prompt,
+        n: 1,
+        size: "1792x1024",
+        response_format: "b64_json"
       }
     };
   }
@@ -422,7 +495,7 @@ export function parseImageResponse(provider, data) {
     return null;
   }
 
-  if (provider === "openai" || provider === "openrouter") {
+  if (provider === "openai" || provider === "openrouter" || provider === "meta") {
     const entry = data?.data?.[0];
     if (!entry) return null;
     if (entry.b64_json) {
@@ -499,7 +572,8 @@ export async function generateDishImage({
         provider: target.provider,
         apiKey: target.apiKey,
         model: target.model,
-        prompt
+        prompt,
+        baseUrl: target.baseUrl
       });
       const res = await fetchImpl(desc.url, {
         method: "POST",
@@ -567,7 +641,7 @@ export function parseProviderChunk(provider, rawLine) {
     return { text, done: false };
   }
 
-  if (provider === "openai" || provider === "openrouter") {
+  if (provider === "openai" || provider === "openrouter" || provider === "meta") {
     const delta = data?.choices?.[0]?.delta?.content;
     const msg = data?.choices?.[0]?.message?.content;
     return { text: delta ?? msg ?? "", done: false };
@@ -735,7 +809,7 @@ async function executeProviderFetch(opts, stream, signal) {
     throw mapNetworkError(creds.provider, err, creds.ollamaHost);
   }
 
-  if (!res.ok && res.status === 400 && creds.provider === "openrouter" && jsonMode) {
+  if (!res.ok && res.status === 400 && (creds.provider === "openrouter" || creds.provider === "meta") && jsonMode) {
     const preview = await res.text().catch(() => "");
     if (/response_format|json_object|structured/i.test(preview)) {
       try {
@@ -744,7 +818,7 @@ async function executeProviderFetch(opts, stream, signal) {
         throw mapNetworkError(creds.provider, err, creds.ollamaHost);
       }
     } else {
-      throw makeHttpError(400, preview.slice(0, 280) || "OpenRouter rejected the request.");
+      throw makeHttpError(400, preview.slice(0, 280) || "AI provider rejected the request.");
     }
   }
 
@@ -814,7 +888,7 @@ export async function completeJson(opts, signal) {
     const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p?.text || "").join("");
     return extractJsonObject(text);
   }
-  if (creds.provider === "openai" || creds.provider === "openrouter") {
+  if (creds.provider === "openai" || creds.provider === "openrouter" || creds.provider === "meta") {
     const data = JSON.parse(raw);
     if (data?.error) throw makeHttpError(502, data.error.message || "Upstream AI error.");
     const text = data?.choices?.[0]?.message?.content || "";

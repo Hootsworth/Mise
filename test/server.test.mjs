@@ -354,3 +354,57 @@ test("POST /api/generate rejects unconfigured server providers with HTTP 400 JSO
     await srv.close();
   }
 });
+
+test("Meta AI provider routes /api/health, /api/generate, and /api/dish-image via https://api.meta.ai/v1", async () => {
+  const calls = [];
+  const jsonText = JSON.stringify(MOCK_RECIPE);
+  const mockFetch = async (url, init) => {
+    calls.push({ url: String(url), auth: init?.headers?.Authorization, body: JSON.parse(init.body) });
+    if (String(url).endsWith("/images/generations")) {
+      return new Response(JSON.stringify({ data: [{ b64_json: "QUJD" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return makeSseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: jsonText } }] })}\n\n`,
+      `data: [DONE]\n\n`
+    ]);
+  };
+
+  const srv = await startTestServer(mockFetch, {
+    DEFAULT_PROVIDER: "meta",
+    MODEL_API_KEY: "LLM_test_meta_key"
+  });
+  try {
+    const health = await (await fetch(`${srv.baseUrl}/api/health`)).json();
+    assert.equal(health.defaultProvider, "meta");
+    assert.equal(health.providers.find((p) => p.id === "meta").configured, true);
+
+    const genRes = await fetch(`${srv.baseUrl}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "meta", query: "miso eggplant" })
+    });
+    assert.equal(genRes.status, 200);
+    const sse = await genRes.text();
+    assert.match(sse, /event: done/);
+    assert.equal(calls[0].url, "https://api.meta.ai/v1/chat/completions");
+    assert.equal(calls[0].auth, "Bearer LLM_test_meta_key");
+    assert.equal(calls[0].body.model, "muse-spark-1.3");
+    assert.equal(calls[0].body.messages[0].role, "developer");
+
+    const imgRes = await fetch(`${srv.baseUrl}/api/dish-image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "meta", title: "Smoky Miso Eggplant" })
+    });
+    const imgJson = await imgRes.json();
+    assert.equal(imgJson.source, "meta");
+    assert.equal(imgJson.imageUrl, "data:image/png;base64,QUJD");
+    assert.equal(calls[1].url, "https://api.meta.ai/v1/images/generations");
+    assert.equal(calls[1].body.model, "muse-image-1.0");
+  } finally {
+    await srv.close();
+  }
+});

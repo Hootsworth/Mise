@@ -3,6 +3,7 @@ import path from "node:path";
 
 export const PUBLIC_PROVIDERS = [
   { id: "gemini", label: "Google Gemini", envVar: "GEMINI_API_KEY", supportsImages: true },
+  { id: "meta", label: "Meta AI", envVar: "META_API_KEY", altEnvVar: "MODEL_API_KEY", supportsImages: true },
   { id: "openai", label: "OpenAI", envVar: "OPENAI_API_KEY", supportsImages: true },
   { id: "claude", label: "Anthropic Claude", envVar: "ANTHROPIC_API_KEY", supportsImages: false },
   { id: "openrouter", label: "OpenRouter", envVar: "OPENROUTER_API_KEY", supportsImages: true },
@@ -52,7 +53,7 @@ export function getPublicProviderCatalog(env = process.env) {
     const configured =
       p.id === "ollama"
         ? Boolean(env.OLLAMA_HOST?.trim() || env.OLLAMA_MODEL?.trim())
-        : Boolean(env[p.envVar]?.trim());
+        : Boolean(env[p.envVar]?.trim() || (p.altEnvVar && env[p.altEnvVar]?.trim()));
     return {
       id: p.id,
       label: p.label,
