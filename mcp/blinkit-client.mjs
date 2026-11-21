@@ -1,6 +1,20 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+
+function expandHomePath(rawPath = "") {
+  const s = String(rawPath || "").trim();
+  if (s === "~") return os.homedir();
+  if (s.startsWith("~/")) return path.join(os.homedir(), s.slice(2));
+  return s;
+}
+
+function badRequestError(message) {
+  const err = new Error(message);
+  err.status = 400;
+  return err;
+}
 
 /**
  * Parses Blinkit `search` stdout lines:
@@ -246,14 +260,25 @@ export function createBlinkitClient({ spawnImpl = spawn, fetchImpl = fetch } = {
 
     if (mode === "sse") {
       sseEndpoint = String(config.sseUrl || "http://127.0.0.1:8000/sse").trim();
+      let parsedUrl;
+      try {
+        parsedUrl = new URL(sseEndpoint);
+      } catch {
+        throw badRequestError(`Invalid Blinkit SSE URL: ${sseEndpoint}`);
+      }
+      if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+        throw badRequestError(`Blinkit SSE URL must use http:// or https://: ${sseEndpoint}`);
+      }
       await openSseStream(sseEndpoint);
     } else {
-      const repoPath = String(config.repoPath || "").trim();
+      const repoPath = expandHomePath(config.repoPath);
       if (!repoPath) {
-        throw new Error("Enter the local path to your cloned blinkit-mcp folder first.");
+        throw badRequestError(
+          "Enter the local path to your cloned blinkit-mcp folder first (for example ~/blinkit-mcp)."
+        );
       }
       if (!fs.existsSync(repoPath)) {
-        throw new Error(`Blinkit MCP path does not exist: ${repoPath}`);
+        throw badRequestError(`Blinkit MCP path does not exist: ${repoPath}`);
       }
       const cmd = config.command || "uv";
       const args = Array.isArray(config.args) && config.args.length ? config.args : ["run", "main.py"];
@@ -285,7 +310,12 @@ export function createBlinkitClient({ spawnImpl = spawn, fetchImpl = fetch } = {
 
       child.on("error", (err) => {
         initialized = false;
-        rejectAllPending(new Error(`Could not start ${cmd} in ${repoPath}: ${err.message}`));
+        const msg =
+          err?.code === "ENOENT"
+            ? `${cmd} was not found in PATH — install uv and run \`uv sync\` inside ${repoPath}.`
+            : `Could not start ${cmd} in ${repoPath}: ${err.message}`;
+        const outErr = err?.code === "ENOENT" ? badRequestError(msg) : new Error(msg);
+        rejectAllPending(outErr);
       });
 
       child.on("exit", (code) => {

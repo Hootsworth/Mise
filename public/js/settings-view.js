@@ -83,6 +83,7 @@ export function renderSettingsView(rootEl, ctx) {
   let blinkitOtp = "";
   let blinkitAwaitingOtp = false;
   let mcpBusy = false;
+  const cardNotice = { swiggy: null, zepto: null, blinkit: null };
 
   let activeTab = ctx.activeTab || "ai";
   let showKey = false;
@@ -532,6 +533,11 @@ export function renderSettingsView(rootEl, ctx) {
     const zeptoPerms = GROCERY_PLATFORMS.find((p) => p.id === "zepto")?.permissions || [];
     const blinkitPerms = GROCERY_PLATFORMS.find((p) => p.id === "blinkit")?.permissions || [];
     const zomatoPerms = FOOD_PLATFORMS.find((p) => p.id === "zomato")?.permissions || [];
+    const renderCardNotice = (pid) => {
+      const n = cardNotice[pid];
+      if (!n?.text) return "";
+      return `<p class="mcp-card-msg ${n.isError ? "is-error" : ""}" role="status" aria-live="polite">${esc(n.text)}</p>`;
+    };
 
     return `
       <div class="st-delivery">
@@ -577,6 +583,7 @@ export function renderSettingsView(rootEl, ctx) {
               <ul class="mcp-perm-list">
                 ${swiggyPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
               </ul>
+              ${renderCardNotice("swiggy")}
               <div class="mcp-app-foot">
                 <small class="mcp-meta">${swiggy.connected ? esc(formatExpiry(swiggy.expiresAt) || "Active session") : "Phone + OTP in Swiggy popup"}</small>
                 <div class="mcp-card-acts">
@@ -600,6 +607,7 @@ export function renderSettingsView(rootEl, ctx) {
               <ul class="mcp-perm-list">
                 ${zeptoPerms.map((p) => `<li>${esc(p)}</li>`).join("")}
               </ul>
+              ${renderCardNotice("zepto")}
               <div class="mcp-app-foot">
                 <small class="mcp-meta">${zepto.connected ? esc(formatExpiry(zepto.expiresAt) || "Active session") : "Uses whitelisted localhost /callback"}</small>
                 <div class="mcp-card-acts">
@@ -669,6 +677,7 @@ export function renderSettingsView(rootEl, ctx) {
                     : ""
                 }
               </div>
+              ${renderCardNotice("blinkit")}
               <div class="mcp-app-foot">
                 <small class="mcp-meta">Session stored locally in <code>~/.blinkit_mcp</code></small>
                 <div class="mcp-card-acts">
@@ -1094,17 +1103,20 @@ export function renderSettingsView(rootEl, ctx) {
       rootEl.querySelector(`#st-oauth-${pid}`)?.addEventListener("click", async () => {
         syncDeliveryInputs();
         mcpBusy = true;
-        statusMsg = { text: `Opening ${pid === "swiggy" ? "Swiggy" : "Zepto"} OAuth sign-in popup…`, isError: false };
+        const msg = `Opening ${pid === "swiggy" ? "Swiggy" : "Zepto"} OAuth sign-in popup…`;
+        cardNotice[pid] = { text: msg, isError: false };
+        statusMsg = { text: msg, isError: false };
         render();
         try {
           const nextStatus = await ctx.onStartMcpOAuth?.(pid, deliveryDraft);
           if (nextStatus) mcpState = structuredClone(nextStatus);
-          statusMsg = {
-            text: `${pid === "swiggy" ? "Swiggy (Instamart & Food)" : "Zepto"} signed in successfully.`,
-            isError: false
-          };
+          const okMsg = `${pid === "swiggy" ? "Swiggy (Instamart & Food)" : "Zepto"} signed in successfully.`;
+          cardNotice[pid] = { text: okMsg, isError: false };
+          statusMsg = { text: okMsg, isError: false };
         } catch (err) {
-          statusMsg = { text: err?.message || `Could not sign in to ${pid}.`, isError: true };
+          const errMsg = err?.message || `Could not sign in to ${pid}.`;
+          cardNotice[pid] = { text: errMsg, isError: true };
+          statusMsg = { text: errMsg, isError: true };
         } finally {
           mcpBusy = false;
           render();
@@ -1121,9 +1133,12 @@ export function renderSettingsView(rootEl, ctx) {
           const nextStatus = await ctx.onDisconnectMcp?.(pid, deliveryDraft);
           if (nextStatus) mcpState = structuredClone(nextStatus);
           if (pid === "blinkit") blinkitAwaitingOtp = false;
+          cardNotice[pid] = { text: "Disconnected.", isError: false };
           statusMsg = { text: `Disconnected ${pid}.`, isError: false };
         } catch (err) {
-          statusMsg = { text: err?.message || `Could not disconnect ${pid}.`, isError: true };
+          const errMsg = err?.message || `Could not disconnect ${pid}.`;
+          cardNotice[pid] = { text: errMsg, isError: true };
+          statusMsg = { text: errMsg, isError: true };
         } finally {
           mcpBusy = false;
           render();
@@ -1134,12 +1149,31 @@ export function renderSettingsView(rootEl, ctx) {
     rootEl.querySelector("#st-blinkit-mode")?.addEventListener("change", (e) => {
       syncDeliveryInputs();
       blinkitMode = e.target.value === "sse" ? "sse" : "stdio";
+      cardNotice.blinkit = null;
       render();
     });
 
     rootEl.querySelector("#st-blinkit-connect")?.addEventListener("click", async () => {
       syncDeliveryInputs();
+      if (blinkitMode === "stdio" && !blinkitRepoPath) {
+        const hint =
+          "Clone github.com/hereisSwapnil/blinkit-mcp (`uv sync && uv run playwright install chromium`), then enter its local folder path above (e.g. ~/blinkit-mcp).";
+        cardNotice.blinkit = { text: hint, isError: true };
+        statusMsg = { text: hint, isError: true };
+        render();
+        rootEl.querySelector("#st-blinkit-repo")?.focus();
+        return;
+      }
+      if (blinkitMode === "sse" && !blinkitSseUrl) {
+        const hint = "Enter the running Blinkit SSE URL (for example http://127.0.0.1:8000/sse).";
+        cardNotice.blinkit = { text: hint, isError: true };
+        statusMsg = { text: hint, isError: true };
+        render();
+        rootEl.querySelector("#st-blinkit-sse")?.focus();
+        return;
+      }
       mcpBusy = true;
+      cardNotice.blinkit = { text: "Connecting to Blinkit MCP…", isError: false };
       statusMsg = { text: "Connecting to Blinkit MCP…", isError: false };
       render();
       try {
@@ -1148,14 +1182,15 @@ export function renderSettingsView(rootEl, ctx) {
           deliveryDraft
         );
         if (res?.status) mcpState = structuredClone(res.status);
-        statusMsg = {
-          text: res?.loggedIn
-            ? "Blinkit connected & logged in."
-            : "Blinkit connected — enter your mobile number below to verify with OTP.",
-          isError: false
-        };
+        const okMsg = res?.loggedIn
+          ? "Blinkit connected & logged in."
+          : "Blinkit connected — enter your mobile number above to verify with OTP.";
+        cardNotice.blinkit = { text: okMsg, isError: false };
+        statusMsg = { text: okMsg, isError: false };
       } catch (err) {
-        statusMsg = { text: err?.message || "Could not connect to Blinkit MCP.", isError: true };
+        const errMsg = err?.message || "Could not connect to Blinkit MCP.";
+        cardNotice.blinkit = { text: errMsg, isError: true };
+        statusMsg = { text: errMsg, isError: true };
       } finally {
         mcpBusy = false;
         render();
@@ -1165,7 +1200,9 @@ export function renderSettingsView(rootEl, ctx) {
     rootEl.querySelector("#st-blinkit-send-otp")?.addEventListener("click", async () => {
       syncDeliveryInputs();
       if (!blinkitPhone) {
+        cardNotice.blinkit = { text: "Enter your 10-digit mobile number for Blinkit OTP.", isError: true };
         setStatus("Enter your 10-digit mobile number for Blinkit OTP.", true);
+        render();
         return;
       }
       mcpBusy = true;
@@ -1174,12 +1211,13 @@ export function renderSettingsView(rootEl, ctx) {
         const res = await ctx.onBlinkitLogin?.(blinkitPhone, deliveryDraft);
         if (res?.status) mcpState = structuredClone(res.status);
         blinkitAwaitingOtp = !res?.alreadyLogged;
-        statusMsg = {
-          text: res?.alreadyLogged ? "Blinkit session already logged in." : res?.message || "OTP sent to your phone.",
-          isError: false
-        };
+        const okMsg = res?.alreadyLogged ? "Blinkit session already logged in." : res?.message || "OTP sent to your phone.";
+        cardNotice.blinkit = { text: okMsg, isError: false };
+        statusMsg = { text: okMsg, isError: false };
       } catch (err) {
-        statusMsg = { text: err?.message || "Failed to initiate Blinkit login.", isError: true };
+        const errMsg = err?.message || "Failed to initiate Blinkit login.";
+        cardNotice.blinkit = { text: errMsg, isError: true };
+        statusMsg = { text: errMsg, isError: true };
       } finally {
         mcpBusy = false;
         render();
@@ -1189,7 +1227,9 @@ export function renderSettingsView(rootEl, ctx) {
     rootEl.querySelector("#st-blinkit-verify-otp")?.addEventListener("click", async () => {
       syncDeliveryInputs();
       if (!blinkitOtp) {
+        cardNotice.blinkit = { text: "Enter the OTP code.", isError: true };
         setStatus("Enter the OTP code.", true);
+        render();
         return;
       }
       mcpBusy = true;
@@ -1198,12 +1238,13 @@ export function renderSettingsView(rootEl, ctx) {
         const res = await ctx.onBlinkitOtp?.(blinkitOtp, deliveryDraft);
         if (res?.status) mcpState = structuredClone(res.status);
         if (res?.loggedIn) blinkitAwaitingOtp = false;
-        statusMsg = {
-          text: res?.loggedIn ? "Blinkit signed in successfully." : res?.message || "Verification checked.",
-          isError: !res?.loggedIn
-        };
+        const msg = res?.loggedIn ? "Blinkit signed in successfully." : res?.message || "Verification checked.";
+        cardNotice.blinkit = { text: msg, isError: !res?.loggedIn };
+        statusMsg = { text: msg, isError: !res?.loggedIn };
       } catch (err) {
-        statusMsg = { text: err?.message || "OTP verification failed.", isError: true };
+        const errMsg = err?.message || "OTP verification failed.";
+        cardNotice.blinkit = { text: errMsg, isError: true };
+        statusMsg = { text: errMsg, isError: true };
       } finally {
         mcpBusy = false;
         render();

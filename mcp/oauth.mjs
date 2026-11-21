@@ -149,11 +149,20 @@ async function registerDynamicClient({ providerId, meta, redirectUri, store, fet
     token_endpoint_auth_method: "none"
   };
 
-  const regRes = await fetchImpl(meta.registrationEndpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(regPayload)
-  });
+  let regRes;
+  try {
+    regRes = await fetchImpl(meta.registrationEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(regPayload)
+    });
+  } catch (err) {
+    const netErr = new Error(
+      `Could not reach ${OAUTH_PROVIDERS[providerId].label} over the network (${err?.message || "fetch failed"}). Ensure the Mise companion process has outbound internet access.`
+    );
+    netErr.status = 502;
+    throw netErr;
+  }
 
   const data = await safeReadJson(regRes);
   if (!regRes.ok || !data?.client_id) {
@@ -233,14 +242,23 @@ async function postTokenRequest(tokenEndpoint, paramsObj, preferMode, fetchImpl)
             .filter(([, v]) => v !== undefined && v !== null && v !== "")
             .map(([k, v]) => [k, String(v)])
         ).toString();
-    const res = await fetchImpl(tokenEndpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": isJson ? "application/json" : "application/x-www-form-urlencoded",
-        Accept: "application/json"
-      },
-      body
-    });
+    let res;
+    try {
+      res = await fetchImpl(tokenEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": isJson ? "application/json" : "application/x-www-form-urlencoded",
+          Accept: "application/json"
+        },
+        body
+      });
+    } catch (err) {
+      const netErr = new Error(
+        `Could not reach OAuth token server over the network (${err?.message || "fetch failed"}).`
+      );
+      netErr.status = 502;
+      throw netErr;
+    }
     const data = await safeReadJson(res);
     return { res, data };
   };

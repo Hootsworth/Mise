@@ -4016,6 +4016,22 @@ select.m3-select:focus {
   flex-wrap: wrap;
 }
 
+.mcp-card-msg {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--soft);
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--mut);
+}
+
+.mcp-card-msg.is-error {
+  border-color: var(--line);
+  color: var(--fg);
+}
+
 .ob-oauth-row {
   display: flex;
   flex-wrap: wrap;

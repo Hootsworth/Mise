@@ -34,6 +34,14 @@ test("static server serves index.html, JS/CSS modules, and sample photos securel
     const img = await fetch(`${srv.baseUrl}/images/miso-rigatoni.jpg`);
     assert.equal(img.status, 200);
     assert.match(img.headers.get("content-type"), /image\/jpeg/);
+
+    const favSvg = await fetch(`${srv.baseUrl}/favicon.svg`);
+    assert.equal(favSvg.status, 200);
+    assert.match(favSvg.headers.get("content-type"), /image\/svg\+xml/);
+
+    const favIco = await fetch(`${srv.baseUrl}/favicon.ico`);
+    assert.equal(favIco.status, 200);
+    assert.match(favIco.headers.get("content-type"), /image\/svg\+xml/);
   } finally {
     await srv.close();
   }

@@ -476,7 +476,21 @@ rl.on("line", (line) => {
     ).json();
     assert.equal(confirmed.data.orderId, "ORD-SW-1");
 
-    // 7. Blinkit stdio client (ignores `False` line, supports Phone + OTP + search + disconnect)
+    // 7. Blinkit config validation (400 instead of 500) + stdio client (ignores `False` line, supports Phone + OTP + search + disconnect)
+    const blkEmpty = await fetch(`${baseUrl}/api/mcp/blinkit/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "stdio", repoPath: "" })
+    });
+    assert.equal(blkEmpty.status, 400);
+
+    const blkMissing = await fetch(`${baseUrl}/api/mcp/blinkit/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "stdio", repoPath: path.join(tmpDir, "does-not-exist") })
+    });
+    assert.equal(blkMissing.status, 400);
+
     const blkCfg = await (
       await fetch(`${baseUrl}/api/mcp/blinkit/config`, {
         method: "POST",

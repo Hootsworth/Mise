@@ -126,18 +126,40 @@ export async function startOAuthSignIn(providerId, prefs) {
     throw new Error("Start the Mise Local Companion (`npm start`) to sign in with OAuth.");
   }
 
-  const started = await companionJson(origin, `/api/mcp/oauth/start/${encodeURIComponent(providerId)}`, {
-    method: "POST",
-    body: { openerOrigin: globalThis.location?.origin || origin }
-  });
-
+  // Open popup synchronously inside user activation so browsers never block it after DCR
   const popup = globalThis.open(
-    started.authUrl,
+    "about:blank",
     `mise_mcp_${providerId}`,
     "width=520,height=720,resizable=yes,scrollbars=yes"
   );
   if (!popup) {
     throw new Error("Popup blocked by browser. Allow popups for Mise and try again.");
+  }
+  try {
+    const doc = popup.document;
+    if (doc?.body) {
+      doc.title = "Mise — Connecting…";
+      doc.body.innerHTML =
+        '<p style="font-family:system-ui,sans-serif;padding:32px;text-align:center;color:#444">Opening sign-in…</p>';
+    }
+  } catch {
+    // Ignore cross-origin document write restriction
+  }
+
+  let started;
+  try {
+    started = await companionJson(origin, `/api/mcp/oauth/start/${encodeURIComponent(providerId)}`, {
+      method: "POST",
+      body: { openerOrigin: globalThis.location?.origin || origin }
+    });
+    popup.location.replace(started.authUrl);
+  } catch (err) {
+    try {
+      popup.close();
+    } catch {
+      // Ignore
+    }
+    throw err;
   }
 
   const expectedCallbackOrigin = new URL(started.redirectUri).origin;

@@ -89,6 +89,23 @@ export function createServer({ publicDir = DEFAULT_PUBLIC_DIR, mcpStatePath, mcp
       const handled = await mcpBridge.handleRequest(req, res, url);
       if (handled) return;
     }
+    if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/favicon.ico") {
+      const iconPath = path.join(path.resolve(publicDir), "favicon.svg");
+      try {
+        const content = await fs.readFile(iconPath);
+        res.writeHead(200, {
+          "Content-Type": "image/svg+xml",
+          "Content-Length": content.length,
+          "X-Content-Type-Options": "nosniff",
+          "Cache-Control": "public, max-age=300"
+        });
+        res.end(req.method === "HEAD" ? undefined : content);
+      } catch {
+        res.writeHead(204);
+        res.end();
+      }
+      return;
+    }
     if (req.method === "GET" || req.method === "HEAD") {
       return await serveStatic(res, publicDir, url.pathname, req.method);
     }
